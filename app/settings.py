@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger("settings")
 
-GROUPS = ["Real-Debrid", "Downloads", "File selection", "Access", "Protection", "Runtime (environment only)"]
+GROUPS = ["Real-Debrid", "Downloads", "File selection", "Sonarr / Radarr", "Access", "Protection", "Runtime (environment only)"]
 
 
 @dataclass
@@ -89,6 +89,25 @@ SCHEMA = [
           "Also trip the killswitch after 3 consecutive failed checks (e.g. gluetun unreachable). "
           "Off by default so a flaky check never stalls downloads."),
 
+    Field("ARR_ENABLED", "bool", False, "Blocklist rejected releases", "Sonarr / Radarr",
+          "When Real-Debrid permanently refuses or never gets a release (blocked, dead, or uncached in cached-only "
+          "mode), mark the grab failed in Sonarr/Radarr so it is blocklisted, then trigger a normal search. Needs "
+          "each instance's URL, API key and the categories it uses below. Never grabs releases itself."),
+    Field("ARR_MAX_ATTEMPTS", "int", 3, "Max attempts per episode/movie", "Sonarr / Radarr",
+          "Stop blocklisting and searching for one episode or movie after this many tries.", min=1, max=20),
+]
+for _i in range(1, 5):
+    SCHEMA += [
+        Field(f"ARR_{_i}_TYPE", "enum", "sonarr", f"Instance {_i}: type", "Sonarr / Radarr", "",
+              choices=["sonarr", "radarr"]),
+        Field(f"ARR_{_i}_URL", "str", "", f"Instance {_i}: URL", "Sonarr / Radarr",
+              "Leave empty to skip this instance.", placeholder="http://sonarr:8989"),
+        Field(f"ARR_{_i}_API_KEY", "secret", "", f"Instance {_i}: API key", "Sonarr / Radarr",
+              "Settings > General > API Key. Stored in /config and never shown again."),
+        Field(f"ARR_{_i}_CATEGORIES", "str", "", f"Instance {_i}: categories", "Sonarr / Radarr",
+              "Comma-separated download categories this instance uses.", placeholder="tv, tv-anime"),
+    ]
+SCHEMA += [
     Field("LOG_LEVEL", "enum", "INFO", "Log level", "Runtime (environment only)", "Applies immediately.",
           choices=["DEBUG", "INFO", "WARNING", "ERROR"]),
     Field("CONFIG_PATH", "str", "/config", "Config path", "Runtime (environment only)",
@@ -134,7 +153,7 @@ def coerce(f, raw):
             re.compile(s)
         except re.error as e:
             raise ValueError(f"invalid regex: {e}")
-    elif f.key in ("RD_API_URL", "GLUETUN_URL", "IP_CHECK_URL") and s and not re.match(r"https?://", s):
+    elif (f.key in ("RD_API_URL", "GLUETUN_URL", "IP_CHECK_URL") or f.key.endswith("_URL") and f.key.startswith("ARR_")) and s and not re.match(r"https?://", s):
         raise ValueError("must start with http:// or https://")
     elif f.key == "DOWNLOAD_PATH" and not s.startswith("/"):
         raise ValueError("must be an absolute path")

@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 
 import config
+from arr import Arr, ArrError
 from rd import RealDebrid, RDError
 
 log = logging.getLogger("manager")
@@ -49,6 +50,9 @@ class RateLimiter:
 class Manager:
     def __init__(self):
         self.rd = RealDebrid()
+        self.arr = Arr()
+        self.arr_attempts = {}        # "<instance>:<episode/movie id>" -> blocklist+search rounds done
+        self.arr_error = ""           # last Sonarr/Radarr problem needing attention (bad key, unreachable)
         self.gate = lambda: None      # returns a reason string while downloads must stop (killswitch)
         self.paused = False           # manual pause from the UI
         self.bytes_total = 0
@@ -69,6 +73,7 @@ class Manager:
             with open(self.state_file) as f:
                 d = json.load(f)
             self.torrents, self.categories = d.get("torrents", {}), d.get("categories", {})
+            self.arr_attempts = d.get("arr_attempts", {})
         except (OSError, ValueError):
             pass
         for t in self.torrents.values():
@@ -80,7 +85,7 @@ class Manager:
             os.makedirs(config.CONFIG_PATH, exist_ok=True)
             tmp = self.state_file + ".tmp"
             with open(tmp, "w") as f:
-                json.dump({"torrents": self.torrents, "categories": self.categories}, f)
+                json.dump({"torrents": self.torrents, "categories": self.categories, "arr_attempts": self.arr_attempts}, f)
             os.replace(tmp, self.state_file)
 
     def blocked_reason(self):
@@ -98,7 +103,13 @@ class Manager:
         return False
 
     # ---- API operations
-    def _track(self, h, category, name, state, rd_id="", error="", source=None):
+    def _flag_block(self, t, reason):
+        """Ask Sonarr/Radarr (if configured) to blocklist this release; done later from poll() because the arr
+        records the grab in its history only after our add returns."""
+        if config.ARR_ENABLED and t.get("category"):
+            t["arr"] = dict(reason=reason, since=int(time.time()), next=0)
+
+    def _track(self, h, category, name, state, rd_id="", error="", source=None, block=False):
         """Record a torrent unless the hash is already known; returns whether it was recorded."""
         with self.lock:
             if h in self.torrents:
@@ -111,6 +122,8 @@ class Manager:
             )
             if source:
                 t["source"] = source
+            if block:
+                self._flag_block(t, error)
             self.torrents[h] = t
             self._save()
             return True
@@ -118,8 +131,8 @@ class Manager:
     def add(self, h, rid_fn, category, name, source=None):
         """Accept a torrent. With `source` (("magnet", str) or ("torrent", base64)), a valid add never fails:
         if Real-Debrid can't be reached right now (killswitch, no token, outage) it is queued and sent later, and
-        if RD permanently rejects it it is listed as an error. Sonarr/Radarr only blacklist and re-search on a failed
-        *tracked download*; a failed add leaves the episode stuck as grabbed."""
+        if RD permanently rejects it it is listed as an error (the arrs show that as a warning; they never blocklist
+        on it). A failed add is worse: it leaves the episode stuck as grabbed."""
         with self.lock:
             if h in self.torrents:
                 return
@@ -131,7 +144,7 @@ class Manager:
             except RDError as e:
                 if e.permanent and not e.auth:
                     log.warning("%s: Real-Debrid rejected the add: %s", name or h, e)
-                    self._track(h, category, name, "error", error=f"Real-Debrid rejected it: {e}")
+                    self._track(h, category, name, "error", error=f"Real-Debrid rejected it: {e}", block=True)
                     return
                 why = str(e)
             except requests.RequestException as e:
@@ -149,7 +162,7 @@ class Manager:
                 self.rd.delete(rid)
             # An uncached torrent is accepted and reported as an error for the same reason (see above).
             ok = self._track(h, category, name, "error" if uncached else "rd_pending",
-                             rd_id="" if uncached else rid, error=NOT_CACHED if uncached else "")
+                             rd_id="" if uncached else rid, error=NOT_CACHED if uncached else "", block=uncached)
             if not ok and not uncached:   # added twice at once
                 self.rd.delete(rid)
         finally:
@@ -164,6 +177,7 @@ class Manager:
             if e.permanent and not e.auth:
                 t["state"], t["error"] = "error", f"Real-Debrid rejected it: {e}"
                 t.pop("source", None)
+                self._flag_block(t, t["error"])
             elif e.auth:
                 self.rd_error = f"Real-Debrid rejected the API token ({e.status}); check it in Settings"
             raise
@@ -172,6 +186,7 @@ class Manager:
             if config.CACHED_ONLY and not self._probe_cached(rid):
                 self.rd.delete(rid)
                 t["state"], t["error"] = "error", NOT_CACHED
+                self._flag_block(t, NOT_CACHED)
             else:
                 t["rd_id"], t["state"] = rid, "rd_pending"
             t.pop("source", None)
@@ -280,6 +295,8 @@ class Manager:
             items = list(self.torrents.values())
         for t in items:
             st = t["state"]
+            if t.get("arr") and time.time() >= t["arr"]["next"]:
+                self._arr_step(t)
             if st == "queued_add" and config.RD_API_TOKEN and not self.blocked_reason():
                 try:
                     self._send_queued(t)
@@ -308,14 +325,46 @@ class Manager:
                 self.pool.submit(self._download, t)
         self._save()
 
-    @staticmethod
-    def _check_stall(t):
+    def _arr_step(self, t):
+        """One attempt at blocklisting t in Sonarr/Radarr; retries while the arr hasn't recorded the grab."""
+        a, now = t["arr"], time.time()
+        slot = self.arr.slot_for(t["category"]) if config.ARR_ENABLED else None
+        if not slot:
+            t.pop("arr", None)
+            return
+        try:
+            res = self.arr.blocklist(slot, t["hash"], self.arr_attempts, config.ARR_MAX_ATTEMPTS)
+            self.arr_error = ""
+        except (ArrError, requests.RequestException) as e:
+            self.arr_error = str(e) if isinstance(e, ArrError) and e.auth else self.arr_error
+            log.warning("%s: couldn't reach %s: %s", t["name"], slot["type"], e)
+            a["next"] = now + 60
+            if now - a["since"] > 1800:
+                log.warning("%s: giving up blocklisting after 30 minutes", t["name"])
+                t.pop("arr", None)
+            return
+        if res == "retry":
+            a["next"] = now + 30
+            if now - a["since"] > 600:
+                log.info("%s: %s has no grab for it in its history; nothing to blocklist", t["name"], slot["type"])
+                t.pop("arr", None)
+            return
+        if res == "capped":
+            log.warning("%s: already blocklisted and searched %d times; leaving it to you (%s)",
+                        t["name"], config.ARR_MAX_ATTEMPTS, a["reason"])
+        else:
+            log.info("%s: marked failed in %s (%s) and searched again", t["name"], slot["type"], a["reason"])
+        t.pop("arr", None)
+        self._save()
+
+    def _check_stall(self, t):
         """Fail torrents Real-Debrid has not advanced for STALL_TIMEOUT_HOURS (dead magnets would wait forever)."""
         limit = config.STALL_TIMEOUT_HOURS * 3600
         if limit and t["state"] in ("rd_pending", "rd_wait_select", "rd_downloading") \
                 and time.time() - t.get("progress_at", t["added"]) > limit:
             log.warning("%s: no progress on Real-Debrid for %dh; giving up", t["name"], config.STALL_TIMEOUT_HOURS)
             t["state"], t["error"] = "error", f"stalled on Real-Debrid for {config.STALL_TIMEOUT_HOURS}h"
+            self._flag_block(t, t["error"])
 
     def _poll_one(self, t):
         info = self.rd.info(t["rd_id"])
@@ -336,6 +385,7 @@ class Manager:
             if s == "magnet_conversion":
                 return
             t["state"], t["error"] = "error", s
+            self._flag_block(t, s)
         else:
             t["state"] = "rd_downloading"
 

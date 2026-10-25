@@ -20,7 +20,7 @@ def env(tmp_path, monkeypatch):
 @pytest.fixture
 def client(env):
     """Fresh app modules per test (settings store, manager and protection are module-level)."""
-    for m in ("settings", "config", "auth", "protection", "manager", "rd", "ui", "main", "logbuffer"):
+    for m in ("settings", "config", "auth", "protection", "arr", "manager", "rd", "ui", "main", "logbuffer", "version"):
         sys.modules.pop(m, None)
     main = importlib.import_module("main")
     main.app.testing = True

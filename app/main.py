@@ -61,7 +61,7 @@ def magnet_hash(m):
 def view(t):
     size = t["size"] or 0
     if t["state"] == "error" and not size:
-        size = 1   # Sonarr seems to ignore a zero-size item as "not started"; an errored one must look like a real, failed download
+        size = 1   # harmless cosmetic: show an errored item as a non-empty download (does not trigger the arrs' failure handling)
     if t["state"] == "completed":
         prog = 1.0
     elif t["state"] in ("downloading", "rd_ready"):

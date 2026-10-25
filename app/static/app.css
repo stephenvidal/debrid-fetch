@@ -123,7 +123,7 @@ td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:now
   .field.sw{grid-template-columns:1fr auto;align-items:center}
 }
 @media (max-width:760px){
-  .shell{grid-template-columns:minmax(0,1fr)}
+  .shell{grid-template-columns:minmax(0,1fr);align-content:start}   /* else a short page stretches the header row to fill the screen */
   .side{position:sticky;top:0;z-index:6;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;padding:10px 12px 0;gap:6px 10px;border-right:0;border-bottom:1px solid var(--line)}
   .side .brand{order:1}.side-foot{order:2;margin:0 0 0 auto}
   nav{order:3;flex:1 0 100%;flex-direction:row;gap:2px;overflow-x:auto;scrollbar-width:none;margin:0 -12px;padding:0 12px 8px}
@@ -150,3 +150,5 @@ input,select{min-width:0;text-overflow:ellipsis}
 @media (max-width:760px){.field .ctl{flex-wrap:nowrap}.field .ctl .btn{flex:none}}
 .pct{min-width:42px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;flex:none}
 @media (max-width:760px){nav a{padding:7px 9px}nav{gap:0}}
+@media (max-width:420px){nav a{padding:7px 7px}.side{padding-left:10px;padding-right:10px}nav{margin:0 -10px;padding:0 10px 8px}}
+@media (max-width:380px){nav a{padding:7px 5px;font-size:13px;gap:4px}}

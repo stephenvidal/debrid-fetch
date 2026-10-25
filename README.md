@@ -63,6 +63,9 @@ All of these can be set as environment variables or in the web UI.
 | `DOWNLOAD_RETRIES` | 5 | Attempts per file (exponential backoff, resumes partial files) |
 | `CACHED_ONLY` | false | Only accept torrents Real-Debrid already has cached; others are removed again and show as failed |
 | `CACHED_PROBE_SECONDS` | 10 | How long to wait for the cache check |
+| `ARR_ENABLED` | false | Blocklist permanently rejected releases in Sonarr/Radarr (see above) |
+| `ARR_MAX_ATTEMPTS` | 3 | Blocklist-and-search rounds per episode/movie |
+| `ARR_1_TYPE` ... `ARR_4_CATEGORIES` | empty | Up to four instances: type, URL, API key (secret), categories |
 | `STALL_TIMEOUT_HOURS` | 24 | Mark a torrent failed when Real-Debrid shows no progress for this long, 0 = never |
 | `SPEED_LIMIT_MBPS` | 0 | Total download limit in MB/s, 0 = unlimited |
 | `DELETE_FROM_RD_ON_COMPLETE` | false | Remove the torrent from your RD account once downloaded |
@@ -91,13 +94,19 @@ All of these can be set as environment variables or in the web UI.
 
 ## Adds never fail
 
-Sonarr/Radarr only blacklist a release and search again when a *tracked download* fails; a failed `torrents/add` leaves the episode stuck as grabbed, and a non-2xx reply marks the whole client unhealthy. So a valid add is always answered `Ok.`: if Real-Debrid can't be reached right now (killswitch, no token, a rejected token, 429/5xx, network) it is saved with its magnet/.torrent and sent when possible, and if RD permanently refuses it (e.g. an invalid or blocked torrent) it is listed with state `error` so the arrs blacklist it. Only a malformed magnet or .torrent returns `Fails.`.
+A failed `torrents/add` leaves the episode stuck as grabbed in Sonarr/Radarr (they record the release as grabbed and stop searching), and a non-2xx reply marks the whole client unhealthy. So a valid add is always answered `Ok.`: if Real-Debrid can't be reached right now (killswitch, no token, a rejected token, 429/5xx, network) it is saved with its magnet/.torrent and sent when possible, and if RD permanently refuses it (e.g. an invalid or blocked torrent) it is listed with state `error`. Sonarr/Radarr show that as a warning in their queue but do **not** blocklist the release or search again: they map qBittorrent's `error` state to a warning, so no qBittorrent-style client can trigger that. Only a malformed magnet or .torrent returns `Fails.`.
+
+## Sonarr/Radarr blocklisting (optional, off by default)
+
+Sonarr and Radarr map every qBittorrent state to a warning at worst, so no torrent client can make them blocklist a release; only their own API can. With `ARR_ENABLED`, debrid-fetch uses it in one narrow case: when Real-Debrid *permanently* refuses a release (blocked/infringing, dead, virus, or never progresses for `STALL_TIMEOUT_HOURS`) or, in cached-only mode, doesn't have it, debrid-fetch looks up the grab by its info hash in the arr's history, marks it failed (which blocklists that release) and triggers a normal `EpisodeSearch`/`MoviesSearch`. The search goes through your quality profiles; debrid-fetch never grabs a release itself. Network errors, rate limits, a rejected token and the killswitch never trigger it.
+
+Configure up to four instances (Settings > Sonarr / Radarr, or env): `ARR_<n>_TYPE` (`sonarr`/`radarr`), `ARR_<n>_URL`, `ARR_<n>_API_KEY` (Settings > General in the arr; stored write-only like the RD token) and `ARR_<n>_CATEGORIES` (comma-separated download categories that instance uses, e.g. `tv, tv-anime`). A torrent whose category matches no instance is left alone. `ARR_MAX_ATTEMPTS` (default 3) caps blocklist-and-search rounds per episode or movie so a run of bad releases can't loop forever. A wrong API key or unreachable arr shows a banner and is retried for 30 minutes. Needs Sonarr/Radarr v3 or later (`/api/v3`).
 
 ## Housekeeping
 
 On each start debrid-fetch compares its state with your Real-Debrid account: unfinished torrents RD no longer has are marked failed, and `.part` files older than 7 days that no tracked torrent owns are deleted. The **Torrents** page has a **Clean up Real-Debrid** button that lists torrents in your RD account which debrid-fetch is not tracking (leftovers, things added from other apps) and deletes them after you confirm. Nothing is ever deleted from your account automatically.
 
-**Cached-only mode.** Real-Debrid has no public cache search, so with `CACHED_ONLY` debrid-fetch adds the torrent, waits up to `CACHED_PROBE_SECONDS` for RD to report it ready, and removes it again if it is not. The add is still accepted, but the torrent is listed with state `error`: Sonarr/Radarr then treat it as a failed download, blacklist the release and search for another. (Returning a failed add instead leaves the episode stuck as grabbed, and a non-2xx response marks the whole client unhealthy.)
+**Cached-only mode.** Real-Debrid has no public cache search, so with `CACHED_ONLY` debrid-fetch adds the torrent, waits up to `CACHED_PROBE_SECONDS` for RD to report it ready, and removes it again if it is not. The add is still accepted and the torrent is listed with state `error`, which the arrs show as a warning. They do not blocklist the release or search again on their own, so you have to mark it failed in the arr yourself; the episode is otherwise left waiting on that queue item. (Returning a failed add instead leaves the episode stuck as grabbed, and a non-2xx response marks the whole client unhealthy.) With the optional Sonarr/Radarr integration below, debrid-fetch can do that for you.
 
 ## Limitations (MVP)
 
