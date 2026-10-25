@@ -39,7 +39,14 @@ def set_session(resp):
 
 @bp.route("/")
 def index():
-    return send_from_directory(STATIC, "index.html", max_age=0)
+    # Version the asset URLs so each release is a new URL: a CDN or browser that overrides Cache-Control for /static
+    # (Cloudflare rewrites it to 4 hours) can't serve a stale app.css/app.js after an upgrade.
+    with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
+        html = f.read().replace("/static/app.css", f"/static/app.css?v={__version__}") \
+                       .replace("/static/app.js", f"/static/app.js?v={__version__}")
+    r = Response(html, mimetype="text/html")
+    r.headers["Cache-Control"] = "no-cache"
+    return r
 
 
 @bp.route("/static/<path:name>")

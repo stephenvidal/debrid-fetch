@@ -4,6 +4,8 @@ Versions follow `app/version.py`. Pushing a `vX.Y.Z` tag publishes `ghcr.io/step
 
 ## Unreleased
 
+- The web UI links its CSS/JS with `?v=<version>`, so upgrades can't be served stale by a CDN that rewrites cache headers.
+- With `ARR_ENABLED`, a torrent is removed from debrid-fetch (and Real-Debrid) once the arr has blocklisted it; the compose example shows the `ARR_*` variables.
 - Optional Sonarr/Radarr integration (`ARR_ENABLED`, off by default): for releases Real-Debrid permanently refuses (or, in cached-only mode, doesn't have), mark the grab failed in the arr so it is blocklisted and trigger a normal search, capped at `ARR_MAX_ATTEMPTS` per episode/movie. The arrs ignore a qBittorrent client's `error` state, so this is the only way to get them to move on.
 - Docs corrected: errored items are only a warning in the arrs; they are not blocklisted without the integration.
 

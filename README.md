@@ -119,6 +119,7 @@ No upload/seeding (ratio 0), no per-torrent speed in the qBittorrent API, a sing
 - **Files are owned by the wrong user / can't be imported.** Set `PUID`/`PGID` to your NAS user and make sure the host folders (including the category folders) are owned by it.
 - **Nothing downloads.** The UI banners say why: no token, a rejected token, the killswitch, a manual pause, or a full disk. The Logs page has the details.
 - **Torrents sit at "Queued at RD".** The torrent isn't cached; Real-Debrid is fetching it. It fails after `STALL_TIMEOUT_HOURS` without progress. Turn on `CACHED_ONLY` if you'd rather skip those releases.
+- **The UI looks stale after an upgrade.** The page links its CSS/JS with the release version, so a new version loads fresh files even behind a CDN or reverse proxy that caches `/static` (Cloudflare, for example, overrides `Cache-Control` with its own 4-hour TTL). If it still looks old, hard-refresh once, or check the proxy isn't also caching `/`.
 - **The port is only reachable from the NAS itself.** The example compose publishes `127.0.0.1:6500` because the arrs reach it over the Docker network. Change the `ports:` line to publish on the LAN, and set a UI login first.
 
 ## Upgrading and rolling back

@@ -98,3 +98,11 @@ def test_index_and_assets_load_when_logged_out(client):
     assert client.get("/").status_code == 200
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/api/ui/settings").status_code == 403
+
+
+def test_index_versions_asset_urls(client):
+    from version import __version__
+    html = client.get("/").get_data(as_text=True)
+    assert f"/static/app.css?v={__version__}" in html and f"/static/app.js?v={__version__}" in html
+    assert client.get("/").headers["Cache-Control"] == "no-cache"
+    assert client.get(f"/static/app.css?v={__version__}").status_code == 200
