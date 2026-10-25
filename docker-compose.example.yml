@@ -20,6 +20,16 @@ services:
       # PROTECTION_MODE: gluetun      # or "ip" with HOME_IPS
       # GLUETUN_URL: http://gluetun:8000
       # KILLSWITCH_ENABLED: "true"
+      # Optional: blocklist releases Real-Debrid permanently refuses in Sonarr/Radarr, then search again (see README)
+      # ARR_ENABLED: "true"
+      # ARR_1_TYPE: sonarr
+      # ARR_1_URL: http://sonarr:8989
+      # ARR_1_API_KEY: ${SONARR_API_KEY}   # set in .env (never commit it)
+      # ARR_1_CATEGORIES: tv, tv-anime
+      # ARR_2_TYPE: radarr                 # up to four instances: ARR_1_* .. ARR_4_*
+      # ARR_2_URL: http://radarr:7878
+      # ARR_2_API_KEY: ${RADARR_API_KEY}
+      # ARR_2_CATEGORIES: movies, movies-anime
     volumes:
       - ./rdt-client/config:/config
       # Explicit bind of the downloads dir, at the same container path Sonarr/Radarr see (/data/downloads).

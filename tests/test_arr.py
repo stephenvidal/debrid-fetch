@@ -95,8 +95,9 @@ def test_rd_rejection_triggers_blocklist_from_poll(arr_env, client):
     t = mgr.torrents[H]
     assert t["state"] == "error" and t["arr"]["next"] == 0
     mgr.poll()
-    assert "arr" not in t and mgr.arr_attempts == {"1:3273": 1}
+    assert mgr.arr_attempts == {"1:3273": 1}
     assert any(c[1].endswith("/history/failed/411") for c in mgr.calls)
+    assert H not in mgr.torrents                                   # removed once the arr has taken over
 
 
 def test_retries_until_arr_has_the_grab(arr_env, client, monkeypatch):
@@ -115,7 +116,7 @@ def test_retries_until_arr_has_the_grab(arr_env, client, monkeypatch):
     assert "arr" in t and t["arr"]["next"] > 0                    # grab not recorded yet: try again later
     mgr._history, t["arr"]["next"] = full, 0
     mgr.poll()
-    assert "arr" not in t and mgr.arr_attempts
+    assert H not in mgr.torrents and mgr.arr_attempts
 
 
 def test_off_by_default_and_uncategorised_never_flagged(client):
@@ -139,3 +140,17 @@ def test_arr_secrets_never_leave_the_server(client):
     d = {x["key"]: x for x in settings.store.describe()}
     assert d["ARR_1_API_KEY"]["is_set"] and "value" not in d["ARR_1_API_KEY"]
     assert "supersecret" not in client.get("/api/ui/settings").get_data(as_text=True)
+
+
+def test_capped_item_is_kept_for_the_user(arr_env, client):
+    import rd
+    mgr = arr_env
+    mgr.arr_attempts["1:3273"] = 3
+
+    class RD:
+        def add_magnet(self, m): raise rd.RDError("infringing_file", 451)
+
+    mgr.rd = RD()
+    client.post("/api/v2/torrents/add", data={"urls": MAGNET, "category": "tv"})
+    mgr.poll()
+    assert H in mgr.torrents and "arr" not in mgr.torrents[H]      # nothing done, so nothing removed

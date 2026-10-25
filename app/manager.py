@@ -355,6 +355,8 @@ class Manager:
         else:
             log.info("%s: marked failed in %s (%s) and searched again", t["name"], slot["type"], a["reason"])
         t.pop("arr", None)
+        if res == "done":
+            self.delete(t["hash"], False)   # the arr no longer tracks it; don't leave a dead item behind
         self._save()
 
     def _check_stall(self, t):
