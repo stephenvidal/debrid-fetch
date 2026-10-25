@@ -48,6 +48,16 @@ class RealDebrid:
     def add_torrent(self, raw):
         return self._req("PUT", "/torrents/addTorrent", data=raw)["id"]
 
+    def list_torrents(self):
+        """Every torrent in the account (the API pages at 100)."""
+        out = []
+        for page in range(1, 51):
+            batch = self._req("GET", "/torrents", params={"limit": 100, "page": page}) or []
+            out += batch
+            if len(batch) < 100:
+                break
+        return out
+
     def info(self, rid):
         return self._req("GET", f"/torrents/info/{rid}")
 
