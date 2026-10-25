@@ -182,3 +182,82 @@ def test_download_refreshes_expired_link_and_pauses_when_disk_full(client, tmp_p
     t.update(state="downloading", files=[], size=10 ** 18)
     mgr._download(t)
     assert t["state"] == "rd_ready"   # paused for space, not failed
+
+
+class RDStub:
+    def __init__(self, torrents=(), statuses=("downloaded",)):
+        self.torrents, self.statuses, self.deleted, self.selected = list(torrents), list(statuses), [], None
+
+    def list_torrents(self): return self.torrents
+    def delete(self, rid): self.deleted.append(rid)
+    def select_files(self, rid, ids="all"): self.selected = ids
+    def info(self, rid):
+        s = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+        return {"status": s, "filename": "x", "files": []}
+
+
+def test_cached_only_rejects_uncached_and_cleans_up(client, monkeypatch):
+    import manager, settings
+    mgr = client.main.mgr
+    monkeypatch.setattr(manager.time, "sleep", lambda s: None)
+    settings.store.update({"CACHED_ONLY": True, "CACHED_PROBE_SECONDS": 3})
+    clock = iter(range(0, 1000))
+    monkeypatch.setattr(manager.time, "monotonic", lambda: next(clock))
+
+    mgr.rd = RDStub(statuses=["magnet_conversion", "waiting_files_selection", "downloading"])
+    with pytest.raises(RuntimeError, match="not cached"):
+        mgr.add("h1", lambda: "RID1", "tv", "n")
+    assert mgr.rd.deleted == ["RID1"] and "h1" not in mgr.torrents and not mgr.pending_ids
+    assert mgr.rd.selected == "all"   # files were selected so RD could report a cached torrent as ready
+
+    mgr.rd = RDStub(statuses=["waiting_files_selection", "downloaded"])
+    mgr.add("h2", lambda: "RID2", "tv", "n")
+    assert mgr.torrents["h2"]["rd_id"] == "RID2" and mgr.rd.deleted == []
+
+    settings.store.update({"CACHED_ONLY": False})   # off: no probing at all
+    mgr.rd = RDStub(statuses=["downloading"])
+    mgr.add("h3", lambda: "RID3", "tv", "n")
+    assert "h3" in mgr.torrents
+
+
+def test_untracked_listing_and_purge(client):
+    mgr = client.main.mgr
+    mgr.torrents["h"] = dict(hash="h", rd_id="MINE", state="rd_pending", name="n")
+    mgr.pending_ids.add("PROBING")
+    mgr.rd = RDStub(torrents=[{"id": "MINE"}, {"id": "PROBING"}, {"id": "OLD1"}, {"id": "OLD2"}])
+    assert [x["id"] for x in mgr.untracked()] == ["OLD1", "OLD2"]
+    assert mgr.purge_untracked(["OLD1", "MINE", "PROBING"]) == 1   # tracked/in-flight ids are never deleted
+    assert mgr.rd.deleted == ["OLD1"]
+
+
+def test_reconcile_fails_vanished_torrents_and_removes_old_orphans(client, tmp_path):
+    import time
+    mgr = client.main.mgr
+    dl = tmp_path / "dl"
+    live, orphan = dl / "tv" / "Live", dl / "tv" / "Gone"
+    live.mkdir(parents=True); orphan.mkdir(parents=True)
+    old = time.time() - 8 * 86400
+    for d, name in ((live, "a.part"), (orphan, "b.part"), (orphan, "c.part")):
+        (d / name).write_bytes(b"x")
+    for p in (live / "a.part", orphan / "b.part"):
+        os.utime(p, (old, old))      # c.part is recent: kept
+    mgr.torrents.update(
+        gone=dict(hash="gone", rd_id="X", state="rd_ready", name="g", save_path=str(dl), error=""),
+        done=dict(hash="done", rd_id="Y", state="completed", name="d", save_path=str(dl), error=""),
+        live=dict(hash="live", rd_id="Z", state="downloading", name="Live", save_path=str(dl / "tv"), error=""))
+    mgr.rd = RDStub(torrents=[{"id": "Z"}])
+    mgr.reconcile()
+    assert mgr.torrents["gone"]["state"] == "error" and "removed" in mgr.torrents["gone"]["error"]
+    assert mgr.torrents["done"]["state"] == "completed"          # finished files stay valid even if gone from RD
+    assert (live / "a.part").exists()                            # owned by a tracked torrent
+    assert not (orphan / "b.part").exists() and (orphan / "c.part").exists()
+    assert mgr.reconciled
+
+
+def test_ui_untracked_endpoints(client):
+    mgr = client.main.mgr
+    mgr.rd = RDStub(torrents=[{"id": "OLD", "filename": "Old.mkv", "bytes": 5, "status": "downloaded"}])
+    r = client.get("/api/ui/rd/untracked")
+    assert r.get_json()["items"][0]["name"] == "Old.mkv"
+    r = client.post("/api/ui/rd/purge-untracked", json={"ids": ["OLD"]}, headers={"X-Requested-With": "debrid-fetch"})
+    assert r.get_json()["removed"] == 1 and mgr.rd.deleted == ["OLD"]

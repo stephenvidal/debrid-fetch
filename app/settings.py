@@ -44,6 +44,11 @@ SCHEMA = [
           "Torrents downloaded at the same time.", min=1, max=16),
     Field("DOWNLOAD_RETRIES", "int", 5, "Retries per file", "Downloads",
           "Attempts with exponential backoff; partial files resume.", min=1, max=50),
+    Field("CACHED_ONLY", "bool", False, "Only accept torrents cached on Real-Debrid", "Real-Debrid",
+          "After adding, wait a few seconds; if Real-Debrid has not got it instantly, remove it again and "
+          "report the add as failed, so Sonarr/Radarr move on to another release."),
+    Field("CACHED_PROBE_SECONDS", "int", 10, "Cache check wait (s)", "Real-Debrid",
+          "How long to wait for Real-Debrid to report a torrent as ready in cached-only mode.", min=3, max=60),
     Field("STALL_TIMEOUT_HOURS", "int", 24, "Give up on stalled torrents after (h)", "Real-Debrid",
           "Mark a torrent as failed when Real-Debrid shows no progress for this long (dead magnets), so the "
           "arrs can pick another release. 0 = never.", min=0, max=720),

@@ -173,6 +173,22 @@ def pause():
     return jsonify(ok=True)
 
 
+@bp.route("/api/ui/rd/untracked")
+def rd_untracked():
+    try:
+        items = _ctx["mgr"].untracked()
+    except Exception as e:
+        return jsonify(error=str(e)), 502
+    return jsonify(items=[dict(id=x["id"], name=x.get("filename", ""), bytes=x.get("bytes", 0),
+                               status=x.get("status", ""), added=x.get("added", "")) for x in items])
+
+
+@bp.route("/api/ui/rd/purge-untracked", methods=["POST"])
+def rd_purge():
+    ids = [str(i) for i in (request.get_json(silent=True) or {}).get("ids", [])]
+    return jsonify(removed=_ctx["mgr"].purge_untracked(ids))
+
+
 @bp.route("/api/ui/protection/check", methods=["POST"])
 def protection_check():
     _ctx["prot"].check()

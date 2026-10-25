@@ -132,8 +132,19 @@ function removeTorrent(t) {
   if (confirm(`Remove "${t.name}" from debrid-fetch and Real-Debrid?\n\nDownloaded files stay on disk.`)) act(`/api/ui/torrents/${t.hash}/delete`, { delete_files: false }, "Removed");
 }
 function pageTorrents(el) {
-  el.replaceChildren(head("Torrents", "Everything Sonarr/Radarr (or you) sent to Real-Debrid."),
+  el.replaceChildren(head("Torrents", "Everything Sonarr/Radarr (or you) sent to Real-Debrid.",
+      h("button", { class: "btn small", title: "Find torrents in your Real-Debrid account that debrid-fetch is not tracking", onclick: cleanRd }, "Clean up Real-Debrid")),
     h("div", { class: "card" }, S.torrents.length ? torrentTable(S.torrents) : h("div", { class: "empty" }, "No torrents yet. Add one from Sonarr/Radarr and it will appear here.")));
+}
+async function cleanRd() {
+  try {
+    const { items } = await api("/api/ui/rd/untracked");
+    if (!items.length) return toast("Nothing to clean: every torrent in your Real-Debrid account is tracked here");
+    const names = items.slice(0, 8).map(i => "  " + (i.name || i.id)).join("\n") + (items.length > 8 ? `\n  ...and ${items.length - 8} more` : "");
+    if (!confirm(`Delete ${items.length} torrent(s) from your Real-Debrid account that debrid-fetch is not tracking?\n\n${names}\n\nThis cannot be undone.`)) return;
+    const r = await api("/api/ui/rd/purge-untracked", { method: "POST", body: { ids: items.map(i => i.id) } });
+    toast(`Removed ${r.removed} from Real-Debrid`);
+  } catch (e) { toast(e.message, true); }
 }
 function pageLogs(el) {
   const keep = el.querySelector(".log"), atEnd = !keep || keep.scrollTop + keep.clientHeight >= keep.scrollHeight - 30;

@@ -53,6 +53,8 @@ class Manager:
         self.rd_error = ""           # last Real-Debrid problem that needs attention (bad token, ...); cleared on success
         self.limiter = RateLimiter()
         self.lock = threading.RLock()
+        self.pending_ids = set()      # RD ids added but not yet tracked (cache probe in progress)
+        self.reconciled = False
         self.state_file = os.path.join(config.CONFIG_PATH, "state.json")
         self.torrents = {}   # hash -> dict
         self.categories = {}
@@ -102,13 +104,92 @@ class Manager:
             if h in self.torrents:
                 return
             rid = rid_fn()
-            self.torrents[h] = dict(
-                hash=h, rd_id=rid, name=name or h, category=category or "",
-                state="rd_pending", rd_progress=0, size=0, dl_bytes=0,
-                added=int(time.time()), completed=0, files=[], error="",
-                save_path=os.path.join(config.DOWNLOAD_PATH, clean(category)) if category else config.DOWNLOAD_PATH,
-            )
+            self.pending_ids.add(rid)
+        try:
+            if config.CACHED_ONLY and not self._probe_cached(rid):
+                self.rd.delete(rid)
+                raise RuntimeError("not cached on Real-Debrid (cached-only mode is on)")
+            with self.lock:
+                if h in self.torrents:   # added twice at once
+                    self.rd.delete(rid)
+                    return
+                self.torrents[h] = dict(
+                    hash=h, rd_id=rid, name=name or h, category=category or "",
+                    state="rd_pending", rd_progress=0, size=0, dl_bytes=0,
+                    added=int(time.time()), completed=0, files=[], error="",
+                    save_path=os.path.join(config.DOWNLOAD_PATH, clean(category)) if category else config.DOWNLOAD_PATH,
+                )
+                self._save()
+        finally:
+            self.pending_ids.discard(rid)
+
+    def _probe_cached(self, rid):
+        """True if Real-Debrid has the torrent ready within CACHED_PROBE_SECONDS (selecting its files if asked)."""
+        deadline = time.monotonic() + config.CACHED_PROBE_SECONDS
+        selected = False
+        while True:
+            info = self.rd.info(rid)
+            s = info["status"]
+            if s == "downloaded":
+                return True
+            if s == "waiting_files_selection" and not selected:
+                self.rd.select_files(rid, self._select(info))
+                selected = True
+            elif s in ("magnet_error", "error", "virus", "dead"):
+                return False
+            if time.monotonic() >= deadline:
+                log.info("%s: not cached on Real-Debrid (status %s)", info.get("filename") or rid, s)
+                return False
+            time.sleep(1)
+
+    # ---- Real-Debrid account housekeeping
+    def untracked(self):
+        """Torrents in the RD account that debrid-fetch does not know about."""
+        with self.lock:
+            known = {t["rd_id"] for t in self.torrents.values()} | self.pending_ids
+        return [x for x in self.rd.list_torrents() if x["id"] not in known]
+
+    def purge_untracked(self, ids):
+        """Delete the given RD torrents, skipping any that became tracked since they were listed."""
+        with self.lock:
+            known = {t["rd_id"] for t in self.torrents.values()} | self.pending_ids
+            ids = [i for i in ids if i not in known]
+        for i in ids:
+            self.rd.delete(i)
+        log.info("removed %d untracked torrent(s) from Real-Debrid", len(ids))
+        return len(ids)
+
+    def reconcile(self):
+        """Once per start: fail torrents Real-Debrid no longer has, and remove stale orphaned .part files."""
+        in_rd = {x["id"] for x in self.rd.list_torrents()}
+        with self.lock:
+            for t in self.torrents.values():
+                if t["state"] != "completed" and t["rd_id"] not in in_rd:
+                    log.warning("%s: no longer on Real-Debrid", t["name"])
+                    t["state"], t["error"] = "error", "removed from Real-Debrid"
+            keep = {os.path.join(t["save_path"], clean(t["name"])) for t in self.torrents.values()}
             self._save()
+        self._clean_orphans(keep)
+        self.reconciled = True
+
+    @staticmethod
+    def _clean_orphans(keep, max_age=7 * 86400):
+        """Delete .part files older than max_age in release folders that no tracked torrent owns."""
+        base = config.DOWNLOAD_PATH
+        for dirpath, dirs, files in os.walk(base):
+            if dirpath[len(base):].count(os.sep) >= 3:
+                dirs[:] = []
+            if dirpath in keep:
+                dirs[:] = []
+                continue
+            for f in files:
+                p = os.path.join(dirpath, f)
+                try:
+                    if f.endswith(".part") and time.time() - os.path.getmtime(p) > max_age:
+                        os.remove(p)
+                        log.info("removed orphaned partial file %s", p)
+                except OSError:
+                    pass
 
     def delete(self, h, delete_files):
         with self.lock:
@@ -127,6 +208,8 @@ class Manager:
                 if not config.RD_API_TOKEN:
                     log.warning("no Real-Debrid token configured; set one in the web UI or RD_API_TOKEN")
                 else:
+                    if not self.reconciled:
+                        self.reconcile()
                     self.poll()
             except Exception:
                 log.exception("poll failed")
