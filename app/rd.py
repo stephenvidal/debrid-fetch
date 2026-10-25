@@ -1,7 +1,6 @@
 import requests
 
-import os
-API = os.environ.get("RD_API_URL", "https://api.real-debrid.com/rest/1.0")
+import config
 
 
 class RDError(Exception):
@@ -9,12 +8,18 @@ class RDError(Exception):
 
 
 class RealDebrid:
-    def __init__(self, token):
+    def __init__(self):
         self.s = requests.Session()
-        self.s.headers["Authorization"] = f"Bearer {token}"
+
+    def _headers(self):
+        return {"Authorization": f"Bearer {config.RD_API_TOKEN}"}
+
+    def user(self, token=None):
+        kw = {"headers": {"Authorization": f"Bearer {token}"}} if token else {}
+        return self._req("GET", "/user", **kw)
 
     def _req(self, method, path, **kw):
-        r = self.s.request(method, API + path, timeout=30, **kw)
+        r = self.s.request(method, config.RD_API_URL + path, timeout=30, **{"headers": self._headers(), **kw})
         if r.status_code >= 400:
             raise RDError(f"{method} {path} -> {r.status_code} {r.text[:200]}")
         return r.json() if r.content else None
@@ -28,8 +33,8 @@ class RealDebrid:
     def info(self, rid):
         return self._req("GET", f"/torrents/info/{rid}")
 
-    def select_all(self, rid):
-        self._req("POST", f"/torrents/selectFiles/{rid}", data={"files": "all"})
+    def select_files(self, rid, ids="all"):
+        self._req("POST", f"/torrents/selectFiles/{rid}", data={"files": ids})
 
     def delete(self, rid):
         try:

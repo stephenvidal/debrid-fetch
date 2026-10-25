@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>debrid-fetch</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236366f1'/%3E%3Cpath d='M16 7v13m0 0-5-5m5 5 5-5M9 24h14' stroke='white' stroke-width='2.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="login" class="login hidden">
+  <form id="loginForm" class="card login-card">
+    <div class="brand"><span class="logo"></span><b>debrid-fetch</b></div>
+    <label>Username<input name="username" autocomplete="username" autofocus></label>
+    <label>Password<input name="password" type="password" autocomplete="current-password"></label>
+    <div id="loginErr" class="err"></div>
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>
+</div>
+
+<div id="app" class="shell hidden">
+  <aside class="side">
+    <div class="brand"><span class="logo"></span><b>debrid-fetch</b></div>
+    <nav id="nav">
+      <a href="#dashboard" data-p="dashboard">Dashboard</a>
+      <a href="#torrents" data-p="torrents">Torrents</a>
+      <a href="#settings" data-p="settings">Settings</a>
+      <a href="#protection" data-p="protection">Protection <i id="navDot" class="dot"></i></a>
+      <a href="#logs" data-p="logs">Logs</a>
+    </nav>
+    <div class="side-foot">
+      <button class="btn ghost small" id="logout">Sign out</button>
+    </div>
+  </aside>
+  <main>
+    <div id="banners"></div>
+    <section data-page="dashboard"></section>
+    <section data-page="torrents"></section>
+    <section data-page="settings"></section>
+    <section data-page="protection"></section>
+    <section data-page="logs"></section>
+  </main>
+</div>
+<div id="toast" class="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
