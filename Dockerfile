@@ -1,4 +1,5 @@
 FROM python:3.12-slim
+LABEL org.opencontainers.image.source="https://github.com/stephenvidal/debrid-fetch" org.opencontainers.image.licenses="MIT"
 ENV PYTHONUNBUFFERED=1 PUID=1000 PGID=1000
 WORKDIR /app
 COPY app/requirements.txt .
