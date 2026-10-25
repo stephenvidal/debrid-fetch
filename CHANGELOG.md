@@ -2,6 +2,11 @@
 
 Versions follow `app/version.py`. Pushing a `vX.Y.Z` tag publishes `ghcr.io/stephenvidal/debrid-fetch:X.Y.Z` (and `X.Y`); `latest` follows `main`.
 
+## Unreleased
+
+- Optional Sonarr/Radarr integration (`ARR_ENABLED`, off by default): for releases Real-Debrid permanently refuses (or, in cached-only mode, doesn't have), mark the grab failed in the arr so it is blocklisted and trigger a normal search, capped at `ARR_MAX_ATTEMPTS` per episode/movie. The arrs ignore a qBittorrent client's `error` state, so this is the only way to get them to move on.
+- Docs corrected: errored items are only a warning in the arrs; they are not blocklisted without the integration.
+
 ## 0.9.0
 
 First release candidate for 1.0.

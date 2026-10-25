@@ -143,7 +143,7 @@ def test_fetch_416_only_trusts_complete_part(client, tmp_path, monkeypatch):
 
 def test_stall_timeout(client):
     import settings, time
-    M = client.main.Manager
+    M = client.main.mgr
     t = dict(name="x", state="rd_pending", added=time.time() - 25 * 3600)
     M._check_stall(t)
     assert t["state"] == "error" and "stalled" in t["error"]
