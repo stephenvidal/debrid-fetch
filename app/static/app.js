@@ -86,7 +86,7 @@ function renderChrome() {
 async function setPaused(paused) { await api("/api/ui/pause", { method: "POST", body: { paused } }); await refreshStatus(); toast(paused ? "Downloads paused" : "Downloads resumed"); }
 
 // ---------------------------------------------------------------- pages
-function head(title, sub, ...actions) { return h("div", { class: "row", style: "margin-bottom:18px" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub", style: "margin:0" }, sub)), h("div", { class: "spacer" }), ...actions); }
+function head(title, sub, ...actions) { return h("div", { class: "pagehead" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, sub)), ...actions); }
 const stateLabel = t => ({ rd_pending: ["Queued at RD", "info"], rd_wait_select: ["Selecting files", "info"], rd_downloading: ["Real-Debrid caching", "info"], rd_ready: ["Ready to fetch", "warn"], downloading: ["Downloading", "ok"], completed: ["Completed", "ok"], error: ["Error", "bad"] }[t.raw_state] || [t.raw_state, ""]);
 
 function render(soft) {
@@ -107,21 +107,21 @@ function pageDashboard(el) {
       stat("Downloading", c.downloading, c.active + " waiting at Real-Debrid"),
       stat("Completed", c.completed, c.total + " tracked"),
       stat("Errors", c.error, c.error ? "needs attention" : "all good"),
-      h("div", { class: "stat" }, h("div", { class: "k" }, "Protection"), h("div", { class: "v" }, h("span", { class: "pill " + prot[1] }, prot[0])), h("div", { class: "s" }, prot[2]))),
+      h("div", { class: "stat wide" }, h("div", { class: "k" }, "Protection"), h("div", { class: "v" }, h("span", { class: "pill " + prot[1] }, prot[0])), h("div", { class: "s" }, prot[2]))),
     h("div", { class: "card" }, h("h2", {}, "Active downloads"), h("p", { class: "hint" }, "Saving to " + st.download_path),
       active.length ? torrentTable(active, false) : h("div", { class: "empty" }, "Nothing downloading.")));
 }
 const stat = (k, v, s) => h("div", { class: "stat" }, h("div", { class: "k" }, k), h("div", { class: "v" }, String(v)), h("div", { class: "s" }, s));
 
 function torrentTable(list, actions = true) {
-  return h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Category"), h("th", {}, "State"), h("th", {}, "Progress"), h("th", { class: "num hide-m" }, "Size"), actions ? h("th", {}) : null)),
+  return h("table", { class: "tt" }, h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Category"), h("th", {}, "State"), h("th", {}, "Progress"), h("th", { class: "num" }, "Size"), actions ? h("th", {}) : null)),
     h("tbody", {}, list.map(t => {
       const [lab, cls] = stateLabel(t), pct = Math.round(t.progress * 100);
-      return h("tr", {}, h("td", { class: "name", title: t.name }, t.name), h("td", {}, t.category || "—"),
-        h("td", {}, h("span", { class: "pill " + cls, title: t.error }, lab)),
-        h("td", {}, h("div", { class: "row", style: "gap:8px;flex-wrap:nowrap" }, h("div", { class: "bar " + (cls === "bad" ? "bad" : t.raw_state === "completed" ? "done" : ""), style: "flex:1" }, h("b", { style: `width:${pct}%` })), h("span", { style: "width:36px;text-align:right" }, pct + "%"))),
-        h("td", { class: "num hide-m" }, fmtBytes(t.size)),
-        actions ? h("td", { class: "num" }, t.raw_state === "error" ? h("button", { class: "btn small", onclick: () => act(`/api/ui/torrents/${t.hash}/retry`, {}, "Retrying") }, "Retry") : null, " ",
+      return h("tr", {}, h("td", { class: "name", title: t.name }, t.name), h("td", { class: "c-cat" }, t.category || "—"),
+        h("td", { class: "c-state" }, h("span", { class: "pill " + cls, title: t.error }, lab)),
+        h("td", { class: "c-prog" }, h("div", { class: "row", style: "gap:8px;flex-wrap:nowrap" }, h("div", { class: "bar " + (cls === "bad" ? "bad" : t.raw_state === "completed" ? "done" : ""), style: "flex:1" }, h("b", { style: `width:${pct}%` })), h("span", { class: "pct" }, pct + "%"))),
+        h("td", { class: "num c-size" }, fmtBytes(t.size)),
+        actions ? h("td", { class: "num c-act" }, t.raw_state === "error" ? h("button", { class: "btn small", onclick: () => act(`/api/ui/torrents/${t.hash}/retry`, {}, "Retrying") }, "Retry") : null,
           h("button", { class: "btn small danger", onclick: () => removeTorrent(t) }, "Remove")) : null);
     })));
 }
@@ -162,7 +162,7 @@ function control(f) {
 function fieldRow(f) {
   const msg = h("div", { class: "msg err", "data-err": f.key });
   const tags = [h("span", { class: "tag " + f.source }, f.source === "ui" ? "set in UI" : f.source === "env" ? "from env" : "default")];
-  const row = h("div", { class: "field" },
+  const row = h("div", { class: "field" + (f.type === "bool" ? " sw" : "") },
     h("div", {}, h("div", { class: "lab" }, f.label, " ", ...tags), h("div", { class: "help" }, f.help)),
     h("div", { class: "ctl" }, control(f),
       f.source === "ui" && !f.readonly ? h("button", { class: "btn small ghost", title: "Forget the saved value and follow the environment / default again", onclick: () => { S.reset.add(f.key); delete S.draft[f.key]; updateBar(); row.style.opacity = .5; msg.className = "msg"; msg.textContent = "Will revert to " + (f.env_set ? "the environment value" : "the default") + " on save"; } }, "Reset") : null),
