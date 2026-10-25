@@ -15,9 +15,11 @@ import ui
 from bencode import info_hash
 from manager import Manager, clean
 from protection import Protection
+from version import __version__
 
 logging.basicConfig(level=config.LOG_LEVEL, format="%(asctime)s %(name)s %(message)s")
 logbuffer.install()
+logging.getLogger("main").info("debrid-fetch %s starting", __version__)
 app = Flask(__name__)
 mgr = Manager()
 prot = Protection()

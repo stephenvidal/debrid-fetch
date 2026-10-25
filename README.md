@@ -103,6 +103,19 @@ On each start debrid-fetch compares its state with your Real-Debrid account: unf
 
 No upload/seeding (ratio 0), no per-torrent speed in the qBittorrent API, a single instance only. Torrents not cached on Real-Debrid still work but wait for RD to fetch them.
 
+## Troubleshooting
+
+- **Sonarr/Radarr say the download client is unavailable.** Check host `rdt-client` (or your container name), port `6500`, and the credentials if you set `WEBUI_USER`/`WEBUI_PASS`. If the container name changed, update the host in the arr, not the port.
+- **Import fails with "no files found" or a path warning.** The downloads folder must be mounted at the same container path in debrid-fetch and the arrs (default `/data/downloads`). No Remote Path Mapping should be needed.
+- **Files are owned by the wrong user / can't be imported.** Set `PUID`/`PGID` to your NAS user and make sure the host folders (including the category folders) are owned by it.
+- **Nothing downloads.** The UI banners say why: no token, a rejected token, the killswitch, a manual pause, or a full disk. The Logs page has the details.
+- **Torrents sit at "Queued at RD".** The torrent isn't cached; Real-Debrid is fetching it. It fails after `STALL_TIMEOUT_HOURS` without progress. Turn on `CACHED_ONLY` if you'd rather skip those releases.
+- **The port is only reachable from the NAS itself.** The example compose publishes `127.0.0.1:6500` because the arrs reach it over the Docker network. Change the `ports:` line to publish on the LAN, and set a UI login first.
+
+## Upgrading and rolling back
+
+`docker compose pull && docker compose up -d`. Settings and state live in `/config` and carry over. To pin a version, use `image: ghcr.io/stephenvidal/debrid-fetch:0.9.0` instead of `latest`; to roll back, set the previous tag and run `docker compose up -d`. See [CHANGELOG.md](CHANGELOG.md). Keep the token out of version control: put it in `.env` or the web UI.
+
 ## Development
 
 ```sh

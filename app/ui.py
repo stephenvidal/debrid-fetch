@@ -11,6 +11,7 @@ import config
 import logbuffer
 from manager import clean
 from rd import RDError
+from version import __version__
 from settings import GROUPS, store
 
 bp = Blueprint("ui", __name__)
@@ -135,7 +136,7 @@ def _counts(mgr):
 @bp.route("/api/ui/status")
 def status():
     mgr = _ctx["mgr"]
-    return jsonify(now=time.time(), counts=_counts(mgr), bytes_total=mgr.bytes_total,
+    return jsonify(version=__version__, now=time.time(), counts=_counts(mgr), bytes_total=mgr.bytes_total,
                    blocked=mgr.blocked_reason(), rd_error=mgr.rd_error, paused=mgr.paused, has_token=bool(config.RD_API_TOKEN),
                    auth_required=auth.required(), protection=_ctx["prot"].snapshot(),
                    download_path=config.DOWNLOAD_PATH, speed_limit_mbps=config.SPEED_LIMIT_MBPS)
