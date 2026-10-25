@@ -88,7 +88,7 @@ class Manager:
 
     def retry(self, h):
         t = self.torrents.get(h)
-        if t and t["state"] == "error":
+        if t and t["state"] == "error" and t.get("rd_id"):
             t["error"] = ""
             t["state"] = "rd_ready" if t.get("links") else "rd_pending"
             self._save()
@@ -106,17 +106,22 @@ class Manager:
             rid = rid_fn()
             self.pending_ids.add(rid)
         try:
-            if config.CACHED_ONLY and not self._probe_cached(rid):
+            uncached = config.CACHED_ONLY and not self._probe_cached(rid)
+            if uncached:
                 self.rd.delete(rid)
-                raise RuntimeError("not cached on Real-Debrid (cached-only mode is on)")
             with self.lock:
                 if h in self.torrents:   # added twice at once
-                    self.rd.delete(rid)
+                    if not uncached:
+                        self.rd.delete(rid)
                     return
+                # An uncached torrent is accepted and reported as an error: Sonarr/Radarr only blacklist the release
+                # and search for another when the tracked download fails. Failing the add itself strands the episode.
                 self.torrents[h] = dict(
-                    hash=h, rd_id=rid, name=name or h, category=category or "",
-                    state="rd_pending", rd_progress=0, size=0, dl_bytes=0,
-                    added=int(time.time()), completed=0, files=[], error="",
+                    hash=h, rd_id="" if uncached else rid, name=name or h, category=category or "",
+                    state="error" if uncached else "rd_pending",
+                    error="not cached on Real-Debrid (cached-only mode is on)" if uncached else "",
+                    rd_progress=0, size=0, dl_bytes=0,
+                    added=int(time.time()), completed=0, files=[],
                     save_path=os.path.join(config.DOWNLOAD_PATH, clean(category)) if category else config.DOWNLOAD_PATH,
                 )
                 self._save()
@@ -196,7 +201,8 @@ class Manager:
             t = self.torrents.pop(h, None)
             self._save()
         if t:
-            self.rd.delete(t["rd_id"])
+            if t["rd_id"]:
+                self.rd.delete(t["rd_id"])
             if delete_files:
                 import shutil
                 shutil.rmtree(os.path.join(t["save_path"], clean(t["name"])), ignore_errors=True)

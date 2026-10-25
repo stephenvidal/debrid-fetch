@@ -28,7 +28,7 @@ def test_file_selection_filters(client, env):
 
 def test_retry_and_manual_pause(client):
     mgr = client.main.mgr
-    mgr.torrents["h"] = dict(hash="h", state="error", error="x", links=["l"])
+    mgr.torrents["h"] = dict(hash="h", rd_id="r", state="error", error="x", links=["l"])
     assert mgr.retry("h") and mgr.torrents["h"]["state"] == "rd_ready"
     mgr.paused = True
     assert mgr.blocked_reason() == "Paused manually"
@@ -205,9 +205,13 @@ def test_cached_only_rejects_uncached_and_cleans_up(client, monkeypatch):
     monkeypatch.setattr(manager.time, "monotonic", lambda: next(clock))
 
     mgr.rd = RDStub(statuses=["magnet_conversion", "waiting_files_selection", "downloading"])
-    with pytest.raises(RuntimeError, match="not cached"):
-        mgr.add("h1", lambda: "RID1", "tv", "n")
-    assert mgr.rd.deleted == ["RID1"] and "h1" not in mgr.torrents and not mgr.pending_ids
+    mgr.add("h1", lambda: "RID1", "tv", "n")      # accepted, not failed: a failed add strands the episode in Sonarr
+    t = mgr.torrents["h1"]
+    assert mgr.rd.deleted == ["RID1"] and not mgr.pending_ids
+    assert t["state"] == "error" and "not cached" in t["error"] and t["rd_id"] == ""
+    assert not mgr.retry("h1")                    # nothing on RD to retry
+    mgr.delete("h1", False)                       # Sonarr's removeFailed; must not call RD with an empty id
+    assert mgr.rd.deleted == ["RID1"] and "h1" not in mgr.torrents
     assert mgr.rd.selected == "all"   # files were selected so RD could report a cached torrent as ready
 
     mgr.rd = RDStub(statuses=["waiting_files_selection", "downloaded"])
