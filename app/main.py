@@ -7,13 +7,20 @@ from base64 import b32decode
 
 from flask import Flask, request, jsonify, Response, make_response
 
+import auth
 import config
+import logbuffer
+import ui
 from bencode import info_hash
 from manager import Manager, clean
+from protection import Protection
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+logging.basicConfig(level=config.LOG_LEVEL, format="%(asctime)s %(name)s %(message)s")
+logbuffer.install()
 app = Flask(__name__)
 mgr = Manager()
+prot = Protection()
+mgr.gate = prot.tripped
 _started = False
 _start_lock = threading.Lock()
 
@@ -24,6 +31,7 @@ def start_worker():
         if not _started:
             _started = True
             threading.Thread(target=mgr.run, daemon=True).start()
+            threading.Thread(target=prot.run, daemon=True).start()
 
 
 start_worker()
@@ -67,17 +75,21 @@ def view(t):
     )
 
 
-def authed():
-    return True
+ui.init(mgr, prot, view)
+app.register_blueprint(ui.bp)
 
 
 @app.route("/api/v2/auth/login", methods=["GET", "POST"])
 def login():
+    addr = request.remote_addr or "?"
+    if auth.locked_out(addr):
+        return Response("Fails.", 200)
     u, p = request.values.get("username", ""), request.values.get("password", "")
-    if config.WEBUI_USER and (u != config.WEBUI_USER or p != config.WEBUI_PASS):
+    if auth.required() and not auth.check_credentials(u, p):
+        auth.record_failure(addr)
         return Response("Fails.", 200)
     r = make_response("Ok.")
-    r.set_cookie("SID", "debrid-fetch")
+    r.set_cookie(auth.COOKIE, auth.token())
     return r
 
 
@@ -88,8 +100,8 @@ def logout():
 
 @app.before_request
 def guard():
-    if config.WEBUI_USER and request.path.startswith("/api/v2/") \
-            and request.path != "/api/v2/auth/login" and request.cookies.get("SID") != "debrid-fetch":
+    if request.path.startswith("/api/v2/") and request.path != "/api/v2/auth/login" \
+            and not auth.valid_cookie(request.cookies.get(auth.COOKIE)):
         return Response("Forbidden", 403)
 
 

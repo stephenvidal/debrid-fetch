@@ -5,14 +5,21 @@ services:
     image: ghcr.io/stephenvidal/debrid-fetch:latest
     container_name: rdt-client
     environment:
+      # Every setting can also be changed in the web UI at http://<nas>:6500 (saved to /config/settings.json,
+      # which overrides the values here). RD_API_TOKEN may be left out and entered in the UI instead.
       RD_API_TOKEN: ${RD_API_TOKEN}   # set in .env (never commit it); https://real-debrid.com/apitoken
       PUID: 1026
       PGID: 100
       UMASK: "002"
       TZ: America/New_York
       DOWNLOAD_PATH: /data/downloads
-      # WEBUI_USER: admin
+      # WEBUI_USER: admin             # protects the web UI and the qBittorrent API (arrs need the same login)
       # WEBUI_PASS: changeme
+      # Optional VPN protection + killswitch (off by default, never blocks startup); see README
+      # PROTECTION_ENABLED: "true"
+      # PROTECTION_MODE: gluetun      # or "ip" with HOME_IPS
+      # GLUETUN_URL: http://gluetun:8000
+      # KILLSWITCH_ENABLED: "true"
     volumes:
       - ./rdt-client/config:/config
       # Explicit bind of the downloads dir, at the same container path Sonarr/Radarr see (/data/downloads).
@@ -22,6 +29,8 @@ services:
       # Loopback only: Sonarr/Radarr reach it by docker DNS (rdt-client:6500). Binding a LAN IP
       # fails with "cannot assign requested address" if that IP changes, leaving the container in Created.
       - "127.0.0.1:6500:6500"
+      # To open the web UI from your LAN, also publish on all interfaces (or put it behind your reverse proxy):
+      # - "6500:6500"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:6500/health')"]
       interval: 30s

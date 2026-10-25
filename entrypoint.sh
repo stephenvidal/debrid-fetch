@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-if [ -z "$RD_API_TOKEN" ]; then echo "RD_API_TOKEN is required" >&2; exit 1; fi
+# RD_API_TOKEN is optional here: it can be set in the web UI (stored in /config/settings.json)
 chown "$PUID:$PGID" /config /data/downloads 2>/dev/null || true
 umask "${UMASK:-002}"
 # single worker: state lives in-process; threads handle concurrency
