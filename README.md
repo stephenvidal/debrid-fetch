@@ -132,3 +132,7 @@ No upload/seeding (ratio 0), no per-torrent speed in the qBittorrent API, a sing
 pip install -r app/requirements.txt pytest
 python -m pytest -q tests
 ```
+
+## License
+
+[MIT](LICENSE).
