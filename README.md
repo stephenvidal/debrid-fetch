@@ -7,8 +7,20 @@ A minimal Real-Debrid download client in a Docker image. It exposes a subset of 
 ```sh
 export RD_API_TOKEN=your_token  # or put it in .env   # https://real-debrid.com/apitoken
 cp docker-compose.example.yml docker-compose.yml
-docker compose up -d --build
+docker compose pull && docker compose up -d
 ```
+
+## Image
+
+A GitHub Actions workflow builds the image (linux/amd64, e.g. Synology DS220+) on every push to `main` and on `v*` tags, and publishes it to `ghcr.io/stephenvidal/debrid-fetch` (tags: `latest`, `sha-<commit>`, and `x.y.z` / `x.y` for releases). The NAS only pulls; nothing is built locally.
+
+The first publish creates the package as private. Either make it public (GitHub > your profile > Packages > debrid-fetch > Package settings > Change visibility), or log in on the NAS with a personal access token that has `read:packages`:
+
+```sh
+echo $GHCR_TOKEN | docker login ghcr.io -u stephenvidal --password-stdin
+```
+
+To update: `docker compose pull && docker compose up -d`. To build locally instead, replace `image:` with `build: .` in your compose file.
 
 In Sonarr/Radarr: Settings > Download Clients > add **qBittorrent**, host `rdt-client` (the compose example keeps that name so an existing rdt-client entry works unchanged), port `6500`, any username/password unless you set `WEBUI_USER`/`WEBUI_PASS`. Set a category (e.g. `tv`, `movies`, `tv-anime`, `movies-anime`); files land in `/data/downloads/<category>/<release name>/`.
 

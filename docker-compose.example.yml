@@ -2,7 +2,7 @@
 # so Sonarr/Radarr's existing qBittorrent-type client needs no changes.
 services:
   rdt-client:
-    build: .
+    image: ghcr.io/stephenvidal/debrid-fetch:latest
     container_name: rdt-client
     environment:
       RD_API_TOKEN: ${RD_API_TOKEN}   # set in .env (never commit it); https://real-debrid.com/apitoken
