@@ -20,7 +20,7 @@ The first publish creates the package as private. Either make it public (GitHub 
 echo $GHCR_TOKEN | docker login ghcr.io -u stephenvidal --password-stdin
 ```
 
-To update: `docker compose pull && docker compose up -d`. To build locally instead, replace `image:` with `build: .` in your compose file.
+To update, name the service so the rest of a shared media stack isn't recreated: `docker compose pull rdt-client && docker compose up -d rdt-client` (use your service name; the example's is `rdt-client`). A private package needs `docker login ghcr.io` on the host first. To build locally instead, replace `image:` with `build: .` in your compose file.
 
 In Sonarr/Radarr: Settings > Download Clients > add **qBittorrent**, host `rdt-client` (the compose example keeps that name so an existing rdt-client entry works unchanged), port `6500`, any username/password unless you set `WEBUI_USER`/`WEBUI_PASS`. Set a category (e.g. `tv`, `movies`, `tv-anime`, `movies-anime`); files land in `/data/downloads/<category>/<release name>/`.
 
@@ -114,7 +114,7 @@ No upload/seeding (ratio 0), no per-torrent speed in the qBittorrent API, a sing
 
 ## Upgrading and rolling back
 
-`docker compose pull && docker compose up -d`. Settings and state live in `/config` and carry over. To pin a version, use `image: ghcr.io/stephenvidal/debrid-fetch:0.9.0` instead of `latest`; to roll back, set the previous tag and run `docker compose up -d`. See [CHANGELOG.md](CHANGELOG.md). Keep the token out of version control: put it in `.env` or the web UI.
+`docker compose pull rdt-client && docker compose up -d rdt-client`, naming the service so the other containers in your stack are left alone (and `docker login ghcr.io` first if the package is private). Settings and state live in `/config` and carry over. To pin a version, use `image: ghcr.io/stephenvidal/debrid-fetch:0.9.0` instead of `latest`; to roll back, set the previous tag and run `docker compose up -d rdt-client`. See [CHANGELOG.md](CHANGELOG.md). Keep the token out of version control: put it in `.env` or the web UI.
 
 ## Development
 

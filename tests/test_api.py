@@ -140,3 +140,11 @@ def test_auth_required_when_credentials_set(client, env):
     assert client.post("/api/v2/auth/login", data={"username": "u", "password": "bad"}).data == b"Fails."
     assert client.post("/api/v2/auth/login", data={"username": "u", "password": "p"}).data == b"Ok."
     assert client.get("/api/v2/torrents/info").status_code == 200   # cookie from login is kept by the test client
+
+
+def test_errored_item_reports_nonzero_size(api):
+    import rd
+    api.main.mgr.rd.fail = rd.RDError("infringing_file", 451)
+    api.post("/api/v2/torrents/add", data={"urls": MAGNET, "category": "tv"})
+    row = api.get("/api/v2/torrents/info").get_json()[0]
+    assert row["state"] == "error" and row["size"] > 0 and row["amount_left"] == row["size"] and row["progress"] == 0
