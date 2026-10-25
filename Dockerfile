@@ -6,8 +6,8 @@ RUN pip install --no-cache-dir -r requirements.txt && apt-get update \
     && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
 COPY app/ .
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh && mkdir -p /config /downloads
-EXPOSE 8080
-VOLUME ["/config", "/downloads"]
-HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:8080/health')"
+RUN chmod +x /entrypoint.sh && mkdir -p /config /data/downloads
+EXPOSE 6500
+VOLUME ["/config", "/data/downloads"]
+HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:6500/health')"
 ENTRYPOINT ["/entrypoint.sh"]

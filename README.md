@@ -5,28 +5,29 @@ A minimal Real-Debrid download client in a Docker image. It exposes a subset of 
 ## Quick start
 
 ```sh
-export RD_API_TOKEN=your_token   # https://real-debrid.com/apitoken
+export RD_API_TOKEN=your_token  # or put it in .env   # https://real-debrid.com/apitoken
 cp docker-compose.example.yml docker-compose.yml
 docker compose up -d --build
 ```
 
-In Sonarr/Radarr: Settings > Download Clients > add **qBittorrent**, host `debrid-fetch` (or the Docker host), port `8080`, any username/password unless you set `WEBUI_USER`/`WEBUI_PASS`. Set a category (e.g. `tv-sonarr`); files land in `DOWNLOAD_PATH/<category>/<release name>/`.
+In Sonarr/Radarr: Settings > Download Clients > add **qBittorrent**, host `rdt-client` (the compose example keeps that name so an existing rdt-client entry works unchanged), port `6500`, any username/password unless you set `WEBUI_USER`/`WEBUI_PASS`. Set a category (e.g. `tv`, `movies`, `tv-anime`, `movies-anime`); files land in `/data/downloads/<category>/<release name>/`.
 
-Mount the downloads volume at the **same path** in debrid-fetch and in Sonarr/Radarr (or add a Remote Path Mapping), because they read the finished files from `content_path`.
+Mount the same `/data` volume as Sonarr/Radarr (`/volume1/docker/data:/data`) so `content_path` matches what they see and imports hardlink instead of copy; no Remote Path Mapping is needed.
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
 | `RD_API_TOKEN` | required | Real-Debrid API token |
-| `DOWNLOAD_PATH` | `/downloads` | Where files are saved |
+| `DOWNLOAD_PATH` | `/data/downloads` | Where files are saved |
 | `CONFIG_PATH` | `/config` | Holds `state.json` (survives restarts) |
 | `PUID` / `PGID` | 1000 / 1000 | Owner of the process and downloaded files |
 | `POLL_INTERVAL` | 15 | Seconds between Real-Debrid status polls |
 | `DOWNLOAD_RETRIES` | 5 | Attempts per file (exponential backoff, resumes partial files) |
 | `MAX_PARALLEL_DOWNLOADS` | 2 | Torrents downloaded at once |
 | `WEBUI_USER` / `WEBUI_PASS` | empty | Optional login; empty accepts any login |
-| `PORT` | 8080 | Listen port |
+| `UMASK` | 002 | Umask for created files |
+| `PORT` | 6500 | Listen port |
 
 ## How it works
 

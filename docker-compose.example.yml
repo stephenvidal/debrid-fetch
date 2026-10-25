@@ -1,17 +1,22 @@
+# Drop-in replacement for rdt-client: same hostname and port (rdt-client:6500),
+# so Sonarr/Radarr's existing qBittorrent-type client needs no changes.
 services:
-  debrid-fetch:
+  rdt-client:
     build: .
-    container_name: debrid-fetch
+    container_name: rdt-client
     environment:
-      RD_API_TOKEN: ${RD_API_TOKEN}   # https://real-debrid.com/apitoken
-      PUID: 1000
-      PGID: 1000
-      DOWNLOAD_PATH: /downloads
+      RD_API_TOKEN: ${RD_API_TOKEN}   # set in .env (never commit it); https://real-debrid.com/apitoken
+      PUID: 1026
+      PGID: 100
+      UMASK: "002"
+      TZ: America/New_York
+      DOWNLOAD_PATH: /data/downloads
       # WEBUI_USER: admin
       # WEBUI_PASS: changeme
     volumes:
-      - ./config:/config
-      - /path/to/media/downloads:/downloads   # mount at the SAME path Sonarr/Radarr see
+      - ./rdt-client/config:/config
+      # Same /data mount as Sonarr/Radarr so completed files can be hardlinked into /data/media.
+      - /volume1/docker/data:/data
     ports:
-      - "8080:8080"
+      - "6500:6500"
     restart: unless-stopped
