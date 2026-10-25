@@ -1,0 +1,17 @@
+services:
+  debrid-fetch:
+    build: .
+    container_name: debrid-fetch
+    environment:
+      RD_API_TOKEN: ${RD_API_TOKEN}   # https://real-debrid.com/apitoken
+      PUID: 1000
+      PGID: 1000
+      DOWNLOAD_PATH: /downloads
+      # WEBUI_USER: admin
+      # WEBUI_PASS: changeme
+    volumes:
+      - ./config:/config
+      - /path/to/media/downloads:/downloads   # mount at the SAME path Sonarr/Radarr see
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
