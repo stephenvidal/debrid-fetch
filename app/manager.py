@@ -118,8 +118,8 @@ class Manager:
     def add(self, h, rid_fn, category, name, source=None):
         """Accept a torrent. With `source` (("magnet", str) or ("torrent", base64)), a valid add never fails:
         if Real-Debrid can't be reached right now (killswitch, no token, outage) it is queued and sent later, and
-        if RD permanently rejects it it is listed as an error. Sonarr/Radarr only blacklist and re-search on a failed
-        *tracked download*; a failed add leaves the episode stuck as grabbed."""
+        if RD permanently rejects it it is listed as an error (the arrs show that as a warning; they never blocklist
+        on it). A failed add is worse: it leaves the episode stuck as grabbed."""
         with self.lock:
             if h in self.torrents:
                 return
