@@ -200,7 +200,7 @@ def test_cached_only_rejects_uncached_and_cleans_up(client, monkeypatch):
     import manager, settings
     mgr = client.main.mgr
     monkeypatch.setattr(manager.time, "sleep", lambda s: None)
-    settings.store.update({"CACHED_ONLY": True, "CACHED_PROBE_SECONDS": 3})
+    settings.store.update({"CACHED_ONLY": True, "CACHED_PROBE_SECONDS": 3, "RD_API_TOKEN": "t"})
     clock = iter(range(0, 1000))
     monkeypatch.setattr(manager.time, "monotonic", lambda: next(clock))
 

@@ -88,7 +88,7 @@ async function setPaused(paused) { await api("/api/ui/pause", { method: "POST", 
 
 // ---------------------------------------------------------------- pages
 function head(title, sub, ...actions) { return h("div", { class: "pagehead" }, h("div", {}, h("h1", {}, title), h("p", { class: "sub" }, sub)), ...actions); }
-const stateLabel = t => ({ rd_pending: ["Queued at RD", "info"], rd_wait_select: ["Selecting files", "info"], rd_downloading: ["Real-Debrid caching", "info"], rd_ready: ["Ready to fetch", "warn"], downloading: ["Downloading", "ok"], completed: ["Completed", "ok"], error: ["Error", "bad"] }[t.raw_state] || [t.raw_state, ""]);
+const stateLabel = t => ({ queued_add: ["Waiting to send to RD", "warn"], rd_pending: ["Queued at RD", "info"], rd_wait_select: ["Selecting files", "info"], rd_downloading: ["Real-Debrid caching", "info"], rd_ready: ["Ready to fetch", "warn"], downloading: ["Downloading", "ok"], completed: ["Completed", "ok"], error: ["Error", "bad"] }[t.raw_state] || [t.raw_state, ""]);
 
 function render(soft) {
   const el = $(`[data-page="${S.page}"]`);

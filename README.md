@@ -47,7 +47,7 @@ Optional and off by default. When enabled, debrid-fetch checks every `PROTECTION
 - `gluetun` mode asks gluetun's control server (`GLUETUN_URL`, port 8000) whether the VPN is running, and shows gluetun's public IP. It tells you the VPN container is up; it does not prove debrid-fetch itself routes through it.
 - `ip` mode looks up the public IP this container actually uses (`IP_CHECK_URL`) and reports *unprotected* if it is one of `HOME_IPS`. This is the stronger check when debrid-fetch is not behind gluetun.
 
-On its own the check is informational. With `KILLSWITCH_ENABLED`, an *unprotected* result immediately stops Real-Debrid polling and all downloads (partial `.part` files are kept and resume) and makes `torrents/add` return `Fails.`, so the arrs retry later. Everything resumes on the next *protected* result. A check that merely fails (gluetun unreachable, lookup timeout) is *unknown* and never trips the killswitch unless you also enable `KILLSWITCH_STRICT`, which trips after 3 consecutive unknowns.
+On its own the check is informational. With `KILLSWITCH_ENABLED`, an *unprotected* result immediately stops Real-Debrid polling and all downloads (partial `.part` files are kept and resume) and holds new adds: `torrents/add` still answers `Ok.` and the torrent waits as *Waiting to send to RD* (state `queuedDL`) until protection is back. Everything resumes on the next *protected* result. A check that merely fails (gluetun unreachable, lookup timeout) is *unknown* and never trips the killswitch unless you also enable `KILLSWITCH_STRICT`, which trips after 3 consecutive unknowns.
 
 ## Configuration
 
@@ -88,6 +88,10 @@ All of these can be set as environment variables or in the web UI.
 2. A background loop polls until Real-Debrid reports `downloaded`.
 3. Files are unrestricted and downloaded to `.part` files, checked against the size Real-Debrid reported, then renamed. An expired download link is replaced with a fresh one; 429/5xx/network errors back off and retry, while a rejected token stops with a banner in the UI. If the disk is too full, downloads pause and resume once space is free.
 4. The torrent then reports state `pausedUP` at 100%, which Sonarr/Radarr treat as complete. Removing it from the client also deletes it from Real-Debrid.
+
+## Adds never fail
+
+Sonarr/Radarr only blacklist a release and search again when a *tracked download* fails; a failed `torrents/add` leaves the episode stuck as grabbed, and a non-2xx reply marks the whole client unhealthy. So a valid add is always answered `Ok.`: if Real-Debrid can't be reached right now (killswitch, no token, a rejected token, 429/5xx, network) it is saved with its magnet/.torrent and sent when possible, and if RD permanently refuses it (e.g. an invalid or blocked torrent) it is listed with state `error` so the arrs blacklist it. Only a malformed magnet or .torrent returns `Fails.`.
 
 ## Housekeeping
 

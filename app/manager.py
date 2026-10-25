@@ -1,4 +1,5 @@
 """Tracks torrents: adds to Real-Debrid, polls, downloads files, persists state."""
+import base64
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import config
 from rd import RealDebrid, RDError
 
 log = logging.getLogger("manager")
+NOT_CACHED = "not cached on Real-Debrid (cached-only mode is on)"
 SAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
@@ -96,35 +98,83 @@ class Manager:
         return False
 
     # ---- API operations
-    def add(self, h, rid_fn, category, name):
-        why = self.gate()
-        if why:
-            raise RuntimeError(why)
+    def _track(self, h, category, name, state, rd_id="", error="", source=None):
+        """Record a torrent unless the hash is already known; returns whether it was recorded."""
+        with self.lock:
+            if h in self.torrents:
+                return False
+            t = dict(
+                hash=h, rd_id=rd_id, name=name or h, category=category or "",
+                state=state, error=error, rd_progress=0, size=0, dl_bytes=0,
+                added=int(time.time()), completed=0, files=[],
+                save_path=os.path.join(config.DOWNLOAD_PATH, clean(category)) if category else config.DOWNLOAD_PATH,
+            )
+            if source:
+                t["source"] = source
+            self.torrents[h] = t
+            self._save()
+            return True
+
+    def add(self, h, rid_fn, category, name, source=None):
+        """Accept a torrent. With `source` (("magnet", str) or ("torrent", base64)), a valid add never fails:
+        if Real-Debrid can't be reached right now (killswitch, no token, outage) it is queued and sent later, and
+        if RD permanently rejects it it is listed as an error. Sonarr/Radarr only blacklist and re-search on a failed
+        *tracked download*; a failed add leaves the episode stuck as grabbed."""
         with self.lock:
             if h in self.torrents:
                 return
-            rid = rid_fn()
-            self.pending_ids.add(rid)
+        why = self.gate() or ("no Real-Debrid token configured" if not config.RD_API_TOKEN else "")
+        rid = None
+        if not why:
+            try:
+                rid = rid_fn()
+            except RDError as e:
+                if e.permanent and not e.auth:
+                    log.warning("%s: Real-Debrid rejected the add: %s", name or h, e)
+                    self._track(h, category, name, "error", error=f"Real-Debrid rejected it: {e}")
+                    return
+                why = str(e)
+            except requests.RequestException as e:
+                why = str(e)
+        if rid is None:
+            if source is None:
+                raise RuntimeError(why)
+            log.warning("%s: can't reach Real-Debrid now (%s); queued, will be sent when possible", name or h, why)
+            self._track(h, category, name, "queued_add", source=source)
+            return
+        self.pending_ids.add(rid)
         try:
             uncached = config.CACHED_ONLY and not self._probe_cached(rid)
             if uncached:
                 self.rd.delete(rid)
-            with self.lock:
-                if h in self.torrents:   # added twice at once
-                    if not uncached:
-                        self.rd.delete(rid)
-                    return
-                # An uncached torrent is accepted and reported as an error: Sonarr/Radarr only blacklist the release
-                # and search for another when the tracked download fails. Failing the add itself strands the episode.
-                self.torrents[h] = dict(
-                    hash=h, rd_id="" if uncached else rid, name=name or h, category=category or "",
-                    state="error" if uncached else "rd_pending",
-                    error="not cached on Real-Debrid (cached-only mode is on)" if uncached else "",
-                    rd_progress=0, size=0, dl_bytes=0,
-                    added=int(time.time()), completed=0, files=[],
-                    save_path=os.path.join(config.DOWNLOAD_PATH, clean(category)) if category else config.DOWNLOAD_PATH,
-                )
-                self._save()
+            # An uncached torrent is accepted and reported as an error for the same reason (see above).
+            ok = self._track(h, category, name, "error" if uncached else "rd_pending",
+                             rd_id="" if uncached else rid, error=NOT_CACHED if uncached else "")
+            if not ok and not uncached:   # added twice at once
+                self.rd.delete(rid)
+        finally:
+            self.pending_ids.discard(rid)
+
+    def _send_queued(self, t):
+        """Send a locally queued add to Real-Debrid; stays queued while RD is unreachable."""
+        kind, data = t["source"]
+        try:
+            rid = self.rd.add_magnet(data) if kind == "magnet" else self.rd.add_torrent(base64.b64decode(data))
+        except RDError as e:
+            if e.permanent and not e.auth:
+                t["state"], t["error"] = "error", f"Real-Debrid rejected it: {e}"
+                t.pop("source", None)
+            elif e.auth:
+                self.rd_error = f"Real-Debrid rejected the API token ({e.status}); check it in Settings"
+            raise
+        self.pending_ids.add(rid)
+        try:
+            if config.CACHED_ONLY and not self._probe_cached(rid):
+                self.rd.delete(rid)
+                t["state"], t["error"] = "error", NOT_CACHED
+            else:
+                t["rd_id"], t["state"] = rid, "rd_pending"
+            t.pop("source", None)
         finally:
             self.pending_ids.discard(rid)
 
@@ -169,7 +219,7 @@ class Manager:
         in_rd = {x["id"] for x in self.rd.list_torrents()}
         with self.lock:
             for t in self.torrents.values():
-                if t["state"] != "completed" and t["rd_id"] not in in_rd:
+                if t["state"] != "completed" and t["rd_id"] and t["rd_id"] not in in_rd:
                     log.warning("%s: no longer on Real-Debrid", t["name"])
                     t["state"], t["error"] = "error", "removed from Real-Debrid"
             keep = {os.path.join(t["save_path"], clean(t["name"])) for t in self.torrents.values()}
@@ -230,6 +280,12 @@ class Manager:
             items = list(self.torrents.values())
         for t in items:
             st = t["state"]
+            if st == "queued_add" and config.RD_API_TOKEN and not self.blocked_reason():
+                try:
+                    self._send_queued(t)
+                except (RDError, requests.RequestException) as e:
+                    log.warning("%s: queued add not sent yet: %s", t["name"], e)
+                continue
             if st in ("rd_pending", "rd_wait_select", "rd_downloading"):
                 try:
                     self._poll_one(t)
