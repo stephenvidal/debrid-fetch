@@ -24,7 +24,7 @@ To update: `docker compose pull && docker compose up -d`. To build locally inste
 
 In Sonarr/Radarr: Settings > Download Clients > add **qBittorrent**, host `rdt-client` (the compose example keeps that name so an existing rdt-client entry works unchanged), port `6500`, any username/password unless you set `WEBUI_USER`/`WEBUI_PASS`. Set a category (e.g. `tv`, `movies`, `tv-anime`, `movies-anime`); files land in `/data/downloads/<category>/<release name>/`.
 
-Mount the same `/data` volume as Sonarr/Radarr (`/volume1/docker/data:/data`) so `content_path` matches what they see and imports hardlink instead of copy; no Remote Path Mapping is needed.
+Bind the downloads directory at the same container path Sonarr/Radarr use (`/volume1/docker/data/downloads:/data/downloads`; or mount all of `/volume1/docker/data:/data`) so `content_path` matches what they see and imports hardlink instead of copy; no Remote Path Mapping is needed. Pre-create the category directories (`tv`, `movies`, `tv-anime`, `movies-anime`) on the host, owned by `PUID:PGID`, to avoid arr path warnings. The image declares no volume for `/data/downloads`, so always bind it explicitly; otherwise files land in an anonymous Docker volume the arrs cannot see.
 
 ## Configuration
 

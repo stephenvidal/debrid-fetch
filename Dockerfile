@@ -8,6 +8,6 @@ COPY app/ .
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /config /data/downloads
 EXPOSE 6500
-VOLUME ["/config", "/data/downloads"]
+VOLUME ["/config"]
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request;urllib.request.urlopen('http://localhost:6500/health')"
 ENTRYPOINT ["/entrypoint.sh"]

@@ -15,8 +15,15 @@ services:
       # WEBUI_PASS: changeme
     volumes:
       - ./rdt-client/config:/config
-      # Same /data mount as Sonarr/Radarr so completed files can be hardlinked into /data/media.
-      - /volume1/docker/data:/data
+      # Explicit bind of the downloads dir, at the same container path Sonarr/Radarr see (/data/downloads).
+      # Pre-create the category dirs (tv, movies, tv-anime, movies-anime) owned by PUID:PGID.
+      - /volume1/docker/data/downloads:/data/downloads
     ports:
-      - "6500:6500"
+      # Loopback only: Sonarr/Radarr reach it by docker DNS (rdt-client:6500). Binding a LAN IP
+      # fails with "cannot assign requested address" if that IP changes, leaving the container in Created.
+      - "127.0.0.1:6500:6500"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:6500/health')"]
+      interval: 30s
+      timeout: 5s
     restart: unless-stopped
