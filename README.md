@@ -61,6 +61,7 @@ All of these can be set as environment variables or in the web UI.
 | `DOWNLOAD_PATH` | `/data/downloads` | Where files are saved |
 | `MAX_PARALLEL_DOWNLOADS` | 2 | Torrents downloaded at once (1-16) |
 | `DOWNLOAD_RETRIES` | 5 | Attempts per file (exponential backoff, resumes partial files) |
+| `STALL_TIMEOUT_HOURS` | 24 | Mark a torrent failed when Real-Debrid shows no progress for this long, 0 = never |
 | `SPEED_LIMIT_MBPS` | 0 | Total download limit in MB/s, 0 = unlimited |
 | `DELETE_FROM_RD_ON_COMPLETE` | false | Remove the torrent from your RD account once downloaded |
 | `MIN_FILE_SIZE_MB` | 0 | Don't select files smaller than this on RD |
@@ -83,7 +84,7 @@ All of these can be set as environment variables or in the web UI.
 
 1. `torrents/add` (magnet URLs or .torrent uploads) adds to Real-Debrid and selects its files (all of them, minus any `MIN_FILE_SIZE_MB` / `EXCLUDE_REGEX` filters).
 2. A background loop polls until Real-Debrid reports `downloaded`.
-3. Files are unrestricted and downloaded to `.part` files, renamed on success.
+3. Files are unrestricted and downloaded to `.part` files, checked against the size Real-Debrid reported, then renamed. An expired download link is replaced with a fresh one; 429/5xx/network errors back off and retry, while a rejected token stops with a banner in the UI. If the disk is too full, downloads pause and resume once space is free.
 4. The torrent then reports state `pausedUP` at 100%, which Sonarr/Radarr treat as complete. Removing it from the client also deletes it from Real-Debrid.
 
 ## Limitations (MVP)

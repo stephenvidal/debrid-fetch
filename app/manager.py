@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +50,7 @@ class Manager:
         self.gate = lambda: None      # returns a reason string while downloads must stop (killswitch)
         self.paused = False           # manual pause from the UI
         self.bytes_total = 0
+        self.rd_error = ""           # last Real-Debrid problem that needs attention (bad token, ...); cleared on success
         self.limiter = RateLimiter()
         self.lock = threading.RLock()
         self.state_file = os.path.join(config.CONFIG_PATH, "state.json")
@@ -142,20 +144,43 @@ class Manager:
             if st in ("rd_pending", "rd_wait_select", "rd_downloading"):
                 try:
                     self._poll_one(t)
+                    self.rd_error = ""
                 except RDError as e:
+                    if e.auth:
+                        self.rd_error = f"Real-Debrid rejected the API token ({e.status}); check it in Settings"
+                        log.error("%s", self.rd_error)
+                        break   # every other torrent would fail the same way
+                    if e.status == 404:  # RD no longer has it (deleted on their side)
+                        t["state"], t["error"] = "error", "not found on Real-Debrid"
                     log.warning("%s: %s", t["name"], e)
+                    if e.status == 429:
+                        time.sleep(min(e.retry_after or 10, 120))
+                        break
+                self._check_stall(t)
             if t["state"] == "rd_ready" and not self.blocked_reason() \
                     and sum(x["state"] == "downloading" for x in items) < config.MAX_PARALLEL_DOWNLOADS:
                 t["state"] = "downloading"
                 self.pool.submit(self._download, t)
         self._save()
 
+    @staticmethod
+    def _check_stall(t):
+        """Fail torrents Real-Debrid has not advanced for STALL_TIMEOUT_HOURS (dead magnets would wait forever)."""
+        limit = config.STALL_TIMEOUT_HOURS * 3600
+        if limit and t["state"] in ("rd_pending", "rd_wait_select", "rd_downloading") \
+                and time.time() - t.get("progress_at", t["added"]) > limit:
+            log.warning("%s: no progress on Real-Debrid for %dh; giving up", t["name"], config.STALL_TIMEOUT_HOURS)
+            t["state"], t["error"] = "error", f"stalled on Real-Debrid for {config.STALL_TIMEOUT_HOURS}h"
+
     def _poll_one(self, t):
         info = self.rd.info(t["rd_id"])
         s = info["status"]
         t["name"] = info.get("filename") or t["name"]
         t["size"] = info.get("bytes", t["size"])
-        t["rd_progress"] = info.get("progress", 0)
+        progress = info.get("progress", 0)
+        if progress != t.get("rd_progress") or s != t.get("rd_status"):
+            t["progress_at"] = int(time.time())
+        t["rd_progress"], t["rd_status"] = progress, s
         if s == "waiting_files_selection":
             self.rd.select_files(t["rd_id"], self._select(info))
             t["state"] = "rd_wait_select"
@@ -190,10 +215,9 @@ class Manager:
             self._chown(t["save_path"])
             self._chown(root)
             links = t.get("links", [])
-            if len(links) == 1 and not t.get("files"):
-                pass
             t["files"] = t.get("files") or []
             done = {f["name"] for f in t["files"] if f.get("done")}
+            self._check_space(root, t)
             for link in links:
                 if self.blocked_reason():
                     raise Paused(self.blocked_reason())
@@ -202,9 +226,22 @@ class Manager:
                 if fname in done:
                     continue
                 dest = os.path.join(root, fname)
-                entry = dict(name=fname, size=u.get("filesize", 0), done=False)
-                t["files"].append(entry)
-                self._retry(lambda: self._fetch(u["download"], dest, t))
+                entry = next((f for f in t["files"] if f["name"] == fname), None)
+                if entry is None:
+                    entry = dict(name=fname, size=u.get("filesize", 0), done=False)
+                    t["files"].append(entry)
+                cur = {"u": u}
+
+                def attempt():
+                    try:
+                        self._fetch(cur["u"]["download"], dest, t, entry["size"])
+                    except requests.HTTPError as e:
+                        if e.response is not None and e.response.status_code in (403, 404, 410):
+                            log.warning("%s: download link expired; asking Real-Debrid for a new one", fname)
+                            cur["u"] = self.rd.unrestrict(link)
+                        raise
+
+                self._retry(attempt)
                 entry["done"] = True
                 self._chown(dest)
                 self._save()
@@ -219,6 +256,17 @@ class Manager:
             t["state"], t["error"] = "error", str(e)
         self._save()
 
+    def _check_space(self, root, t):
+        """Pause (not fail) while the disk is too full, so freeing space lets the download carry on."""
+        if not os.access(root, os.W_OK):
+            raise OSError(f"{root} is not writable by uid {os.getuid()}; check PUID/PGID and the host folder owner")
+        have = sum(os.path.getsize(os.path.join(root, f)) for f in os.listdir(root) if f.endswith(".part")) \
+            if os.path.isdir(root) else 0
+        need = max(0, t.get("size", 0) - have) + (100 << 20)
+        free = shutil.disk_usage(root).free
+        if free < need:
+            raise Paused(f"not enough disk space in {root}: need {need >> 20} MB, {free >> 20} MB free")
+
     def _retry(self, fn):
         delay = 2
         for i in range(config.DOWNLOAD_RETRIES):
@@ -226,22 +274,34 @@ class Manager:
                 return fn()
             except Paused:
                 raise
-            except (requests.RequestException, RDError, OSError) as e:
+            except RDError as e:
+                if e.auth:
+                    self.rd_error = f"Real-Debrid rejected the API token ({e.status}); check it in Settings"
+                if e.permanent or i == config.DOWNLOAD_RETRIES - 1:
+                    raise
+                wait = min(e.retry_after or delay, 120)
+                log.warning("retry %d after Real-Debrid error: %s (waiting %ds)", i + 1, e, wait)
+                time.sleep(wait)
+                delay = min(delay * 2, 60)
+            except (requests.RequestException, OSError) as e:
                 if i == config.DOWNLOAD_RETRIES - 1:
                     raise
                 log.warning("retry %d after error: %s", i + 1, e)
                 time.sleep(delay)
                 delay = min(delay * 2, 60)
 
-    def _fetch(self, url, dest, t):
+    def _fetch(self, url, dest, t, expected=0):
+        """Download to dest + '.part' (resuming), check the size when known, then rename."""
         part = dest + ".part"
         pos = os.path.getsize(part) if os.path.exists(part) else 0
         hdr = {"Range": f"bytes={pos}-"} if pos else {}
         with requests.get(url, headers=hdr, stream=True, timeout=60) as r:
-            if r.status_code == 416:
-                pos = 0  # part file already complete or invalid
-                os.replace(part, dest)
-                return
+            if r.status_code == 416:  # range past the end: the part file is either complete or garbage
+                if expected and pos == expected:
+                    os.replace(part, dest)
+                    return
+                os.remove(part)
+                raise OSError(f"{os.path.basename(dest)}: unusable partial file ({pos} bytes); restarting from zero")
             r.raise_for_status()
             if pos and r.status_code != 206:
                 pos = 0
@@ -254,6 +314,10 @@ class Manager:
                     t["dl_bytes"] += len(chunk)
                     self.bytes_total += len(chunk)
                     self.limiter.throttle(len(chunk))
+        size = os.path.getsize(part)
+        if expected and size != expected:
+            os.remove(part)
+            raise OSError(f"{os.path.basename(dest)}: got {size} bytes, Real-Debrid reported {expected}")
         os.replace(part, dest)
 
     @staticmethod

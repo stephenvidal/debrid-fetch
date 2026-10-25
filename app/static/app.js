@@ -78,6 +78,7 @@ async function refreshStatus() {
 function renderChrome() {
   const st = S.status, b = $("#banners"); b.replaceChildren();
   if (!st.has_token) b.append(h("div", { class: "banner warn" }, h("span", {}, "No Real-Debrid token configured. Nothing will download until you add one."), h("a", { class: "btn small", href: "#settings" }, "Open settings")));
+  if (st.rd_error) b.append(h("div", { class: "banner bad" }, h("span", {}, st.rd_error)));
   if (st.blocked) b.append(h("div", { class: "banner bad" }, h("span", {}, "Downloads are stopped: " + st.blocked), st.paused ? h("button", { class: "btn small", onclick: () => setPaused(false) }, "Resume") : null));
   if (!st.auth_required) b.append(h("div", { class: "banner warn" }, h("span", {}, "No password set: anyone who can reach this port can change settings and see your downloads."), h("a", { class: "btn small", href: "#settings" }, "Set a login")));
   const p = st.protection, d = $("#navDot");
