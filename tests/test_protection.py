@@ -87,6 +87,7 @@ def test_killswitch_pauses_manager_and_refuses_add(client, prot, monkeypatch):
     with pytest.raises(RuntimeError):
         mgr.add("abc", lambda: "rid", "tv", "x")
     r = client.post("/api/v2/torrents/add", data={"urls": "magnet:?xt=urn:btih:" + "a" * 40, "category": "tv"})
-    assert r.data.startswith(b"Fails.")
+    # accepted and queued: a failed add would strand the episode in Sonarr/Radarr
+    assert r.data == b"Ok." and mgr.torrents["a" * 40]["state"] == "queued_add"
     prot.state["status"] = "protected"
     assert mgr.blocked_reason() is None

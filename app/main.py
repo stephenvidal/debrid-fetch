@@ -3,6 +3,7 @@ import os
 import re
 import threading
 import urllib.parse
+import base64
 from base64 import b32decode
 
 from flask import Flask, request, jsonify, Response, make_response
@@ -37,7 +38,7 @@ def start_worker():
 start_worker()
 
 STATE_MAP = {
-    "rd_pending": "metaDL", "rd_wait_select": "metaDL",
+    "queued_add": "queuedDL", "rd_pending": "metaDL", "rd_wait_select": "metaDL",
     "rd_downloading": "downloading", "rd_ready": "queuedDL",
     "downloading": "downloading", "completed": "pausedUP", "error": "error",
 }
@@ -137,19 +138,37 @@ def defsave():
     return config.DOWNLOAD_PATH
 
 
+FILTERS = {   # qBittorrent `filter` values -> predicate on the reported state
+    "downloading": lambda st: st in ("metaDL", "downloading", "queuedDL"),
+    "active": lambda st: st in ("metaDL", "downloading"),
+    "inactive": lambda st: st not in ("metaDL", "downloading"),
+    "completed": lambda st: st == "pausedUP",
+    "paused": lambda st: st == "pausedUP", "stopped": lambda st: st == "pausedUP",
+    "resumed": lambda st: st != "pausedUP", "running": lambda st: st != "pausedUP",
+    "errored": lambda st: st == "error",
+    "seeding": lambda st: False, "stalled": lambda st: False, "stalled_uploading": lambda st: False,
+    "stalled_downloading": lambda st: False,
+}
+
+
 @app.route("/api/v2/torrents/info")
 def info():
     cat = request.args.get("category")
     hashes = request.args.get("hashes")
     hs = set(hashes.lower().split("|")) if hashes else None
+    keep = FILTERS.get(request.args.get("filter", "all"), lambda st: True)
     out = []
     for t in list(mgr.torrents.values()):
         if cat is not None and t["category"] != cat:
             continue
         if hs and t["hash"] not in hs:
             continue
-        out.append(view(t))
-    return jsonify(out)
+        v = view(t)
+        if keep(v["state"]):
+            out.append(v)
+    off, lim = request.args.get("offset", 0, type=int), request.args.get("limit", 0, type=int)
+    out = out[off:]
+    return jsonify(out[:lim] if lim > 0 else out)
 
 
 @app.route("/api/v2/torrents/properties")
@@ -187,12 +206,13 @@ def add():
             m = m.strip()
             if m.startswith("magnet:"):
                 h = magnet_hash(m)
-                mgr.add(h, lambda m=m: mgr.rd.add_magnet(m), cat, h)
+                mgr.add(h, lambda m=m: mgr.rd.add_magnet(m), cat, h, source=("magnet", m))
                 added = True
         for f in request.files.getlist("torrents"):
             raw = f.read()
             h = info_hash(raw)
-            mgr.add(h, lambda raw=raw: mgr.rd.add_torrent(raw), cat, os.path.splitext(f.filename or h)[0])
+            mgr.add(h, lambda raw=raw: mgr.rd.add_torrent(raw), cat, os.path.splitext(f.filename or h)[0],
+                    source=("torrent", base64.b64encode(raw).decode()))
             added = True
     except Exception as e:
         logging.exception("add failed")
@@ -234,7 +254,35 @@ def setcat():
     return ""
 
 
-# Accepted no-ops so *arr clients don't error.
-for _p in ("pause", "resume", "topPrio", "setForceStart", "addTags", "removeTags", "setShareLimits",
-           "recheck", "reannounce", "removeCategories", "editCategory"):
+@app.route("/api/v2/torrents/tags")
+def tags():
+    return jsonify([])
+
+
+@app.route("/api/v2/transfer/info")
+def transfer_info():
+    return jsonify(connection_status="connected", dht_nodes=0, dl_info_data=mgr.bytes_total, dl_info_speed=0,
+                   dl_rate_limit=config.SPEED_LIMIT_MBPS * 1024 * 1024, up_info_data=0, up_info_speed=0, up_rate_limit=0)
+
+
+@app.route("/api/v2/transfer/speedLimitsMode")
+def speed_mode():
+    return "0"
+
+
+@app.route("/api/v2/sync/maindata")
+def maindata():
+    return jsonify(rid=int(request.args.get("rid", 0)) + 1, full_update=True,
+                   torrents={h: view(t) for h, t in list(mgr.torrents.items())},
+                   categories={c: dict(name=c, savePath=os.path.join(config.DOWNLOAD_PATH, clean(c)))
+                               for c in mgr.categories},
+                   tags=[], server_state=dict(connection_status="connected", dl_info_data=mgr.bytes_total,
+                                              dl_info_speed=0, up_info_data=0, up_info_speed=0))
+
+
+# Accepted no-ops so *arr clients don't error (v4 and v5 names). Unknown endpoints would 404 and mark the client unhealthy.
+for _p in ("pause", "resume", "stop", "start", "topPrio", "bottomPrio", "increasePrio", "decreasePrio",
+           "setForceStart", "setForcedStart", "addTags", "removeTags", "createTags", "deleteTags", "setShareLimits",
+           "setDownloadLimit", "setUploadLimit", "setAutoManagement", "setSuperSeeding", "filePrio", "recheck",
+           "reannounce", "removeCategories", "editCategory", "setLocation", "rename", "renameFile"):
     app.add_url_rule(f"/api/v2/torrents/{_p}", f"noop_{_p}", lambda: "", methods=["GET", "POST"])
