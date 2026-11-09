@@ -28,11 +28,13 @@ Bind the downloads directory at the same container path Sonarr/Radarr use (`/vol
 
 ## Web UI
 
-Open `http://<host>:6500/`. It has five pages:
+Open `http://<host>:6500/`. It has seven pages:
 
 - **Dashboard**: live speed, counts, protection status, active downloads, and a pause/resume switch.
-- **Torrents**: everything tracked, with state, progress, retry for errors and remove (files stay on disk).
-- **Settings**: every setting in the table below. Each field shows where its value comes from (*default*, *from env*, *set in UI*); **Reset** drops a UI value so the env/default applies again. The Real-Debrid token has a **Test** button.
+- **Torrents**: everything tracked, with state, progress, retry for errors and remove (files stay on disk). A finished download that holds only archives is marked *needs extracting*.
+- **Check release**: paste magnets or bare info hashes to ask Real-Debrid whether it will serve them. The probe is deleted again, so nothing is added to your downloads; a 451 (or "not cached" with `CACHED_ONLY`) is answered in a second instead of costing a failed grab in Sonarr/Radarr.
+- **Activity**: what happened to each download and why - added, refused by Real-Debrid, removed on their side, stalled, completed, blocklisted in the arr - kept across restarts.
+- **Settings**: every setting in the table below. Each field shows where its value comes from (*default*, *from env*, *set in UI*); **Reset** drops a UI value so the env/default applies again. The Real-Debrid token has a **Test** button. If a value saved here overrides a *different* value from the environment, a banner says so.
 - **Protection**: VPN check and killswitch (below).
 - **Logs**: the last 500 log lines, live.
 
@@ -118,6 +120,8 @@ No upload/seeding (ratio 0), no per-torrent speed in the qBittorrent API, a sing
 - **Import fails with "no files found" or a path warning.** The downloads folder must be mounted at the same container path in debrid-fetch and the arrs (default `/data/downloads`). No Remote Path Mapping should be needed.
 - **Files are owned by the wrong user / can't be imported.** Set `PUID`/`PGID` to your NAS user and make sure the host folders (including the category folders) are owned by it.
 - **Nothing downloads.** The UI banners say why: no token, a rejected token, the killswitch, a manual pause, or a full disk. The Logs page has the details.
+- **"Completed" but the arr says it can't import.** The download is probably an archive; the torrent row says *needs extracting*. Sonarr/Radarr never extract packs, so run Unpackerr against `/data/downloads`.
+- **A release keeps failing immediately.** Paste its magnet (or info hash) into **Check release**: if Real-Debrid answers `refused`, no retry will help - pick another release. The **Activity** page shows the same verdict for grabs that already failed, plus anything Real-Debrid deleted on its side.
 - **Torrents sit at "Queued at RD".** The torrent isn't cached; Real-Debrid is fetching it. It fails after `STALL_TIMEOUT_HOURS` without progress. Turn on `CACHED_ONLY` if you'd rather skip those releases.
 - **The UI looks stale after an upgrade.** The page links its CSS/JS with the release version, so a new version loads fresh files even behind a CDN or reverse proxy that caches `/static` (Cloudflare, for example, overrides `Cache-Control` with its own 4-hour TTL). If it still looks old, hard-refresh once, or check the proxy isn't also caching `/`.
 - **The port is only reachable from the NAS itself.** The example compose publishes `127.0.0.1:6500` because the arrs reach it over the Docker network. Change the `ports:` line to publish on the LAN, and set a UI login first.

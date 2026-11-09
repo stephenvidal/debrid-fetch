@@ -8,6 +8,7 @@ from flask import Blueprint, Response, jsonify, make_response, request, send_fro
 
 import auth
 import config
+import eventlog
 import logbuffer
 from manager import clean
 from rd import RDError
@@ -143,10 +144,21 @@ def _counts(mgr):
 @bp.route("/api/ui/status")
 def status():
     mgr = _ctx["mgr"]
+    drift = store.drift()
+    warnings = []
+    for w in drift:
+        if w["key"] == "RD_API_TOKEN":
+            warnings.append("The Real-Debrid token saved in the UI differs from RD_API_TOKEN in the "
+                            "environment, and the UI value is the one being used. Reset it in Settings to "
+                            "follow .env again.")
+        else:
+            warnings.append(f"{w['label']} is saved in the UI and overrides a different value from the "
+                            f"environment ({w['key']}).")
     return jsonify(version=__version__, now=time.time(), counts=_counts(mgr), bytes_total=mgr.bytes_total,
                    blocked=mgr.blocked_reason(), rd_error=mgr.rd_error, arr_error=mgr.arr_error, paused=mgr.paused, has_token=bool(config.RD_API_TOKEN),
                    auth_required=auth.required(), protection=_ctx["prot"].snapshot(),
-                   download_path=config.DOWNLOAD_PATH, speed_limit_mbps=config.SPEED_LIMIT_MBPS)
+                   download_path=config.DOWNLOAD_PATH, speed_limit_mbps=config.SPEED_LIMIT_MBPS,
+                   config_warnings=warnings)
 
 
 @bp.route("/api/ui/torrents")
@@ -156,7 +168,8 @@ def torrents():
     for t in list(mgr.torrents.values()):
         v = _ctx["view"](t)
         v.update(raw_state=t["state"], error=t.get("error", ""), rd_progress=t["rd_progress"],
-                 files=len(t.get("files") or []), folder=os.path.join(t["save_path"], clean(t["name"])))
+                 files=len(t.get("files") or []), folder=os.path.join(t["save_path"], clean(t["name"])),
+                 packed=bool(t.get("packed")))
         out.append(v)
     out.sort(key=lambda x: x["added_on"], reverse=True)
     return jsonify(out)
@@ -206,3 +219,36 @@ def protection_check():
 @bp.route("/api/ui/logs")
 def logs():
     return jsonify(logbuffer.tail(request.args.get("after", 0, type=int)))
+
+
+@bp.route("/api/ui/rd-check", methods=["POST"])
+def rd_check():
+    """Will Real-Debrid accept these magnets/hashes? Answered without tracking anything."""
+    d = request.get_json(silent=True) or {}
+    raw = d.get("items")
+    if raw is None:
+        raw = [d.get("item")] if d.get("item") else []
+    if not isinstance(raw, list):
+        return jsonify(error="send a list of magnets or info hashes"), 400
+    items = [str(x) for x in raw if str(x or "").strip()][:25]
+    if not items:
+        return jsonify(error="paste a magnet link or an info hash"), 400
+    try:
+        results = _ctx["mgr"].probe(items)
+    except Exception as e:
+        log.exception("rd-check failed")
+        return jsonify(error=f"could not check with Real-Debrid: {e}"), 502
+    return jsonify(results=results)
+
+
+@bp.route("/api/ui/events")
+def events_feed():
+    return jsonify(eventlog.events.tail(after=request.args.get("after", 0, type=int),
+                                        hash=request.args.get("hash"),
+                                        limit=request.args.get("limit", 300, type=int)))
+
+
+@bp.route("/api/ui/events", methods=["DELETE"])
+def events_clear():
+    eventlog.events.clear()
+    return jsonify(ok=True)

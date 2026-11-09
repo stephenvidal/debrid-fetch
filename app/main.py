@@ -1,10 +1,7 @@
 import logging
 import os
-import re
 import threading
-import urllib.parse
 import base64
-from base64 import b32decode
 
 from flask import Flask, request, jsonify, Response, make_response
 
@@ -13,7 +10,7 @@ import config
 import logbuffer
 import ui
 from bencode import info_hash
-from manager import Manager, clean
+from manager import Manager, clean, magnet_hash, magnet_name
 from protection import Protection
 from version import __version__
 
@@ -44,18 +41,6 @@ STATE_MAP = {
     "rd_downloading": "downloading", "rd_ready": "queuedDL",
     "downloading": "downloading", "completed": "pausedUP", "error": "error",
 }
-
-
-def magnet_hash(m):
-    q = urllib.parse.urlparse(m).query
-    for xt in urllib.parse.parse_qs(q).get("xt", []):
-        mm = re.match(r"urn:btih:(.+)", xt, re.I)
-        if mm:
-            h = mm.group(1)
-            if len(h) == 32:
-                h = b32decode(h.upper()).hex()
-            return h.lower()
-    raise ValueError("bad magnet")
 
 
 def view(t):
@@ -210,7 +195,9 @@ def add():
             m = m.strip()
             if m.startswith("magnet:"):
                 h = magnet_hash(m)
-                mgr.add(h, lambda m=m: mgr.rd.add_magnet(m), cat, h, source=("magnet", m))
+                # Prefer the magnet's display name: the arrs read torrents/info names, and a bare hash there
+                # makes the queue unreadable until Real-Debrid reports a filename.
+                mgr.add(h, lambda m=m: mgr.rd.add_magnet(m), cat, magnet_name(m) or h, source=("magnet", m))
                 added = True
         for f in request.files.getlist("torrents"):
             raw = f.read()

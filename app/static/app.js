@@ -28,7 +28,7 @@ async function api(path, opts = {}) {
 }
 
 // ---------------------------------------------------------------- state
-const S = { status: null, torrents: [], settings: null, draft: {}, reset: new Set(), page: "dashboard", logAfter: 0, logs: [], speed: 0, lastBytes: null, rd: null };
+const S = { status: null, torrents: [], settings: null, draft: {}, reset: new Set(), page: "dashboard", logAfter: 0, logs: [], events: [], evAfter: 0, speed: 0, lastBytes: null, rd: null };
 let timers = [];
 
 // ---------------------------------------------------------------- auth / boot
@@ -62,6 +62,7 @@ async function tick() {
   try {
     if (S.page === "torrents" || S.page === "dashboard") { S.torrents = await api("/api/ui/torrents"); }
     if (S.page === "logs") { const l = await api("/api/ui/logs?after=" + S.logAfter); if (l.length) { S.logs = S.logs.concat(l).slice(-500); S.logAfter = l[l.length - 1].id; } }
+    if (S.page === "activity") { const ev = await api("/api/ui/events?after=" + S.evAfter); if (ev.length) { S.events = S.events.concat(ev).slice(-500); S.evAfter = ev[ev.length - 1].id; } }
     render(true);
   } catch (e) {}
 }
@@ -80,6 +81,7 @@ function renderChrome() {
   document.querySelectorAll(".brand b").forEach(e => e.title = "v" + st.version);
   if (!st.has_token) b.append(h("div", { class: "banner warn" }, h("span", {}, "No Real-Debrid token configured. Nothing will download until you add one."), h("a", { class: "btn small", href: "#settings" }, "Open settings")));
   if (st.rd_error) b.append(h("div", { class: "banner bad" }, h("span", {}, st.rd_error)));
+  (st.config_warnings || []).forEach(msg => b.append(h("div", { class: "banner warn" }, h("span", {}, msg), h("a", { class: "btn small", href: "#settings" }, "Settings"))));
   if (st.arr_error) b.append(h("div", { class: "banner bad" }, h("span", {}, st.arr_error)));
   if (st.blocked) b.append(h("div", { class: "banner bad" }, h("span", {}, "Downloads are stopped: " + st.blocked), st.paused ? h("button", { class: "btn small", onclick: () => setPaused(false) }, "Resume") : null));
   if (!st.auth_required) b.append(h("div", { class: "banner warn" }, h("span", {}, "No password set: anyone who can reach this port can change settings and see your downloads."), h("a", { class: "btn small", href: "#settings" }, "Set a login")));
@@ -95,8 +97,8 @@ const stateLabel = t => ({ queued_add: ["Waiting to send to RD", "warn"], rd_pen
 function render(soft) {
   const el = $(`[data-page="${S.page}"]`);
   if (!S.status || !S.settings) return;
-  if (soft && (S.page === "settings" || S.page === "protection")) { if (S.page === "protection") renderProtLive(); return; }  // don't clobber edits
-  ({ dashboard: pageDashboard, torrents: pageTorrents, settings: pageSettings, protection: pageProtection, logs: pageLogs })[S.page](el, soft);
+  if (soft && (S.page === "settings" || S.page === "protection" || S.page === "check")) { if (S.page === "protection") renderProtLive(); return; }  // don't clobber edits
+  ({ dashboard: pageDashboard, torrents: pageTorrents, check: pageCheck, activity: pageActivity, settings: pageSettings, protection: pageProtection, logs: pageLogs })[S.page](el, soft);
 }
 
 function pageDashboard(el) {
@@ -120,7 +122,8 @@ function torrentTable(list, actions = true) {
   return h("table", { class: "tt" }, h("thead", {}, h("tr", {}, h("th", {}, "Name"), h("th", {}, "Category"), h("th", {}, "State"), h("th", {}, "Progress"), h("th", { class: "num" }, "Size"), actions ? h("th", {}) : null)),
     h("tbody", {}, list.map(t => {
       const [lab, cls] = stateLabel(t), pct = Math.round(t.progress * 100);
-      return h("tr", {}, h("td", { class: "name", title: t.name }, t.name), h("td", { class: "c-cat" }, t.category || "—"),
+      return h("tr", {}, h("td", { class: "name", title: t.name }, t.name,
+          t.packed ? h("span", { class: "pill warn", title: "This download is an archive, not a video: Sonarr/Radarr cannot import it until it is extracted." }, "needs extracting") : null), h("td", { class: "c-cat" }, t.category || "—"),
         h("td", { class: "c-state" }, h("span", { class: "pill " + cls, title: t.error }, lab)),
         h("td", { class: "c-prog" }, h("div", { class: "row", style: "gap:8px;flex-wrap:nowrap" }, h("div", { class: "bar " + (cls === "bad" ? "bad" : t.raw_state === "completed" ? "done" : ""), style: "flex:1" }, h("b", { style: `width:${pct}%` })), h("span", { class: "pct" }, pct + "%"))),
         h("td", { class: "num c-size" }, fmtBytes(t.size)),
@@ -148,6 +151,63 @@ async function cleanRd() {
     toast(`Removed ${r.removed} from Real-Debrid`);
   } catch (e) { toast(e.message, true); }
 }
+// ---------------------------------------------------------------- check a release
+function pageCheck(el) {
+  const out = h("div", { class: "card" }, h("div", { class: "empty" }, "Results appear here."));
+  const ta = h("textarea", { class: "ta", rows: "6", spellcheck: "false",
+    placeholder: "magnet:?xt=urn:btih:…\n\nor a bare info hash:\n0123456789abcdef0123456789abcdef01234567" });
+  const btn = h("button", { class: "btn primary", onclick: run }, "Check with Real-Debrid");
+  async function run() {
+    const items = ta.value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    if (!items.length) return toast("Paste a magnet link or an info hash first", true);
+    btn.disabled = true; btn.textContent = "Checking…";
+    out.replaceChildren(h("div", { class: "empty" }, "Asking Real-Debrid…"));
+    try {
+      const { results } = await api("/api/ui/rd-check", { method: "POST", body: { items } });
+      const cls = r => r.verdict === "cached" || r.verdict === "accepted" ? "ok" : r.verdict === "refused" ? "bad" : "warn";
+      const label = r => r.verdict === "cached" ? "cached · ready now" : r.verdict === "accepted" ? "accepted · will cache" : r.verdict;
+      out.replaceChildren(h("table", { class: "tt" },
+        h("thead", {}, h("tr", {}, h("th", {}, "Verdict"), h("th", {}, "Release"), h("th", {}, "Detail"))),
+        h("tbody", {}, results.map(r => h("tr", {},
+          h("td", { class: "c-state" }, h("span", { class: "pill " + cls(r) }, label(r))),
+          h("td", { class: "name", title: r.item }, r.filename || r.hash || r.item),
+          h("td", { class: "detail" }, r.detail || [r.bytes ? fmtBytes(r.bytes) : "", r.status || ""].filter(Boolean).join(" · ")))))));
+      const ok = results.filter(r => r.ok).length;
+      toast(`${ok} of ${results.length} accepted by Real-Debrid`, ok === 0);
+    } catch (e) { out.replaceChildren(h("div", { class: "banner bad" }, e.message)); toast(e.message, true); }
+    btn.disabled = false; btn.textContent = "Check with Real-Debrid";
+  }
+  el.replaceChildren(head("Check a release", "Will Real-Debrid serve it? Answers without grabbing anything or touching your queue."),
+    h("div", { class: "card" }, h("div", { class: "field" }, ta),
+      h("div", { class: "row", style: "margin-top:12px" }, btn,
+        h("span", { class: "hint" }, "One per line. Nothing is added to your downloads or to Real-Debrid."))), out);
+}
+
+// ---------------------------------------------------------------- activity history
+const EVENT_STYLE = { added: "info", queued: "warn", not_cached: "warn", ready: "ok", completed: "ok", archive: "warn",
+  arr_blocklisted: "info", arr_capped: "warn", rd_token: "bad", rd_refused: "bad", rd_failed: "bad",
+  rd_removed: "bad", stalled: "bad", download_failed: "bad", removed: "" };
+
+function pageActivity(el) {
+  const keep = el.querySelector(".log"), atEnd = !keep || keep.scrollTop + keep.clientHeight >= keep.scrollHeight - 30;
+  const box = h("div", { class: "log" }, S.events.length
+    ? S.events.map(e => h("div", { class: "ev" },
+        h("span", { class: "t" }, new Date(e.t * 1000).toLocaleTimeString() + " "),
+        h("span", { class: "pill " + (EVENT_STYLE[e.kind] || "") }, e.kind),
+        h("span", { class: "ev-name", title: e.hash }, " " + (e.name || e.hash || "")),
+        h("span", { class: "ev-detail" }, e.detail || "")))
+    : h("div", { class: "empty" }, "Nothing has happened yet."));
+  el.replaceChildren(head("Activity", "What happened to each download, and why — kept across restarts.",
+      h("button", { class: "btn small", onclick: clearEvents }, "Clear history")),
+    h("div", { class: "card" }, box));
+  if (atEnd) box.scrollTop = box.scrollHeight; else box.scrollTop = keep.scrollTop;
+}
+async function clearEvents() {
+  if (!confirm("Clear the activity history?")) return;
+  try { await api("/api/ui/events", { method: "DELETE" }); S.events = []; S.evAfter = 0; tick(); toast("History cleared"); }
+  catch (e) { toast(e.message, true); }
+}
+
 function pageLogs(el) {
   const keep = el.querySelector(".log"), atEnd = !keep || keep.scrollTop + keep.clientHeight >= keep.scrollHeight - 30;
   const box = h("div", { class: "log" }, S.logs.map(l => h("div", { class: l.level }, h("span", { class: "t" }, new Date(l.t * 1000).toLocaleTimeString() + " "), `${l.level} ${l.name}: ${l.msg}`)));

@@ -246,6 +246,24 @@ class Store:
         v = self._env(BY_KEY[key])
         return BY_KEY[key].default if v is None else v
 
+    def drift(self):
+        """Keys saved in the UI that shadow a *different* environment value.
+
+        This is the silent override that once kept the app on a dead token: .env looked right, the UI
+        value won, and nothing said so. Values are never returned - only the fact of the shadowing.
+        """
+        out = []
+        with self.lock:
+            items = list(self.overrides.items())
+        for k, ui_val in items:
+            f = BY_KEY[k]
+            env_val = self._env(f)
+            if env_val is None or env_val == ui_val:
+                continue
+            out.append(dict(key=k, label=f.label, secret=f.type == "secret"))
+        return out
+
+
     def _save(self):
         d = os.path.dirname(self.path)
         os.makedirs(d, exist_ok=True)

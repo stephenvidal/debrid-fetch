@@ -4,6 +4,12 @@ Versions follow `app/version.py`. Pushing a `vX.Y.Z` tag publishes `ghcr.io/step
 
 ## Unreleased
 
+- **Check a release** (new page): paste magnets or bare info hashes and debrid-fetch asks Real-Debrid whether it will serve them, then deletes the probe torrent. The verdict is the same one a grab would get, so a 451 is a lookup instead of a failed Sonarr/Radarr cycle. `POST /api/ui/rd-check`.
+- **Activity history** (new page): every add, refusal, RD-side removal, stall, completion and arr blocklisting is recorded with its reason and kept across restarts in `/config/events.json` (last 1000). Answers "where did that download go?" without reading container logs. `GET/DELETE /api/ui/events`.
+- **Dead tokens can no longer hide**: the token is validated every five minutes even when nothing is downloading, so `rd_error` is populated while the queue is empty (the old poll loop only noticed a bad token when a torrent failed).
+- **Configuration drift is flagged**: when a value saved in the UI differs from the same variable in the environment, the UI says so in a banner. The UI value still wins, but silently no longer.
+- **Packed releases are labelled**: a finished download that contains only archives is marked "needs extracting" (Sonarr/Radarr never extract; Unpackerr does) and recorded in the activity history.
+- **Readable names for magnets**: when the arr sends a magnet, its `dn=` display name is used instead of the bare info hash, so the queue reads like a release from the first poll.
 - MIT license.
 - The web UI links its CSS/JS with `?v=<version>`, so upgrades can't be served stale by a CDN that rewrites cache headers.
 - With `ARR_ENABLED`, a torrent is removed from debrid-fetch (and Real-Debrid) once the arr has blocklisted it; the compose example shows the `ARR_*` variables.
