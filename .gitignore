@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 config/
 .env
+
+# local test environment
+.venv/

@@ -7,11 +7,13 @@ import re
 import shutil
 import threading
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
 
 import config
+import eventlog
 from arr import Arr, ArrError
 from rd import RealDebrid, RDError
 
@@ -22,6 +24,54 @@ SAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 def clean(name):
     return SAFE.sub("_", name).strip(". ") or "unnamed"
+
+
+def magnet_hash(m):
+    """Info hash of a magnet link (base32 hashes are converted to hex)."""
+    q = urllib.parse.urlparse(m).query
+    for xt in urllib.parse.parse_qs(q).get("xt", []):
+        mm = re.match(r"urn:btih:(.+)", xt, re.I)
+        if mm:
+            h = mm.group(1)
+            if len(h) == 32:
+                h = base64.b32decode(h.upper()).hex()
+            return h.lower()
+    raise ValueError("bad magnet")
+
+
+def magnet_name(m):
+    """The `dn=` display name of a magnet link, if it has one."""
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(m).query)
+    return (qs.get("dn") or [""])[0].strip()
+
+
+VIDEO_EXT = (".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".wmv", ".mpg", ".mpeg", ".webm")
+
+
+def is_packed(files):
+    """True when a finished download holds only archives (a packed release the arrs cannot import).
+
+    Sonarr/Radarr never extract: they park it at "Found archive file, might need to be extracted".
+    Detecting it here means the UI can say so plainly instead of showing a healthy "completed".
+    """
+    names = [(f.get("name") or "").lower() for f in files or []]
+    return bool(names) and not any(n.endswith(VIDEO_EXT) for n in names)
+
+
+
+def _explain(e):
+    """Turn a Real-Debrid error into a verdict a person can act on."""
+    text, low = str(e), str(e).lower()
+    if "infringing_file" in low:
+        return "Real-Debrid refuses this release (infringing_file, HTTP 451) - pick another one"
+    if "unavailable_file" in low:
+        return "Real-Debrid cannot serve this torrent (unavailable_file)"
+    if "bad_token" in low or "bad_apikey" in low:
+        return "Real-Debrid rejected the API token; check it in Settings"
+    if "too_many_requests" in low:
+        return "Real-Debrid rate limit hit; wait a minute and try again"
+    return text[:200]
+
 
 
 class Paused(Exception):
@@ -57,6 +107,7 @@ class Manager:
         self.paused = False           # manual pause from the UI
         self.bytes_total = 0
         self.rd_error = ""           # last Real-Debrid problem that needs attention (bad token, ...); cleared on success
+        self.token_checked = 0.0     # last time the token itself was validated (see _check_token)
         self.limiter = RateLimiter()
         self.lock = threading.RLock()
         self.pending_ids = set()      # RD ids added but not yet tracked (cache probe in progress)
@@ -92,6 +143,90 @@ class Manager:
         if self.paused:
             return "Paused manually"
         return self.gate()
+
+    def _event(self, kind, hash="", name="", detail=""):
+        """One line in the activity history. Never lets bookkeeping break a download."""
+        try:
+            eventlog.events.record(kind, hash=hash, name=name, detail=detail)
+        except Exception:
+            log.debug("could not record event %s", kind, exc_info=True)
+
+    def _check_token(self, max_age=300):
+        """Ask Real-Debrid who we are, even when nothing is downloading.
+
+        Without this a dead token is invisible while the queue is empty: the poll loop has nothing to
+        fail on, so `rd_error` stays empty and the UI looks healthy while every add would be rejected.
+        """
+        if not config.RD_API_TOKEN or self.blocked_reason():
+            return
+        if time.time() - self.token_checked < max_age:
+            return
+        if not hasattr(self.rd, "user"):
+            return
+        self.token_checked = time.time()
+        try:
+            self.rd.user()
+            self.rd_error = ""
+        except RDError as e:
+            if e.auth:
+                self.rd_error = f"Real-Debrid rejected the API token ({e.status}); check it in Settings"
+                log.error("%s", self.rd_error)
+        except requests.RequestException as e:
+            log.debug("token check failed: %s", e)
+
+    def probe(self, items, limit=25):
+        """Ask Real-Debrid whether it would accept each magnet/hash, without tracking anything.
+
+        The verdict is the same refusal the arrs see as a failed grab, so this turns trial-and-error in
+        Sonarr/Radarr into a lookup: paste a release's magnet (or just its info hash) and read the answer.
+        """
+        out = []
+        for raw in (items or [])[:limit]:
+            item = (raw or "").strip()
+            if not item:
+                continue
+            h, magnet = "", ""
+            if item.lower().startswith("magnet:"):
+                magnet = item
+                try:
+                    h = magnet_hash(item)
+                except ValueError:
+                    out.append(dict(item=item, ok=False, hash="", verdict="invalid",
+                                    detail="that magnet link has no usable info hash"))
+                    continue
+            elif re.fullmatch(r"[0-9A-Fa-f]{40}", item):
+                h = item.lower()
+                magnet = "magnet:?xt=urn:btih:" + item
+            else:
+                out.append(dict(item=item, ok=False, hash="", verdict="invalid",
+                                detail="paste a magnet link or a 40-character info hash"))
+                continue
+            if not config.RD_API_TOKEN:
+                out.append(dict(item=item, ok=False, hash=h, verdict="no token",
+                                detail="no Real-Debrid token is configured"))
+                continue
+            try:
+                rid = self.rd.add_magnet(magnet)
+            except RDError as e:
+                out.append(dict(item=item, ok=False, hash=h, status=e.status,
+                                verdict="refused" if e.permanent else "error", detail=_explain(e)))
+                continue
+            except requests.RequestException as e:
+                out.append(dict(item=item, ok=False, hash=h, verdict="error", detail=str(e)[:200]))
+                continue
+            info = {}
+            try:
+                info = self.rd.info(rid) or {}
+            except (RDError, requests.RequestException):
+                pass
+            finally:
+                self.rd.delete(rid)              # a check leaves nothing behind
+            status = (info.get("status") or "").lower()
+            out.append(dict(item=item, ok=True, hash=h, status=status or "accepted",
+                            verdict="cached" if status == "downloaded" else "accepted",
+                            filename=info.get("filename") or "", bytes=info.get("bytes") or 0))
+        return out
+
 
     def retry(self, h):
         t = self.torrents.get(h)
@@ -145,6 +280,7 @@ class Manager:
                 if e.permanent and not e.auth:
                     log.warning("%s: Real-Debrid rejected the add: %s", name or h, e)
                     self._track(h, category, name, "error", error=f"Real-Debrid rejected it: {e}", block=True)
+                    self._event("rd_refused", h, name or h, _explain(e))
                     return
                 why = str(e)
             except requests.RequestException as e:
@@ -154,6 +290,7 @@ class Manager:
                 raise RuntimeError(why)
             log.warning("%s: can't reach Real-Debrid now (%s); queued, will be sent when possible", name or h, why)
             self._track(h, category, name, "queued_add", source=source)
+            self._event("queued", h, name or h, why)
             return
         self.pending_ids.add(rid)
         try:
@@ -163,6 +300,10 @@ class Manager:
             # An uncached torrent is accepted and reported as an error for the same reason (see above).
             ok = self._track(h, category, name, "error" if uncached else "rd_pending",
                              rd_id="" if uncached else rid, error=NOT_CACHED if uncached else "", block=uncached)
+            if uncached:
+                self._event("not_cached", h, name or h, NOT_CACHED)
+            else:
+                self._event("added", h, name or h, category or "")
             if not ok and not uncached:   # added twice at once
                 self.rd.delete(rid)
         finally:
@@ -178,8 +319,10 @@ class Manager:
                 t["state"], t["error"] = "error", f"Real-Debrid rejected it: {e}"
                 t.pop("source", None)
                 self._flag_block(t, t["error"])
+                self._event("rd_refused", t.get("hash", ""), t.get("name", ""), _explain(e))
             elif e.auth:
                 self.rd_error = f"Real-Debrid rejected the API token ({e.status}); check it in Settings"
+                self._event("rd_token", t.get("hash", ""), t.get("name", ""), self.rd_error)
             raise
         self.pending_ids.add(rid)
         try:
@@ -187,8 +330,10 @@ class Manager:
                 self.rd.delete(rid)
                 t["state"], t["error"] = "error", NOT_CACHED
                 self._flag_block(t, NOT_CACHED)
+                self._event("not_cached", t.get("hash", ""), t.get("name", ""), NOT_CACHED)
             else:
                 t["rd_id"], t["state"] = rid, "rd_pending"
+                self._event("added", t.get("hash", ""), t.get("name", ""), t.get("category") or "")
             t.pop("source", None)
         finally:
             self.pending_ids.discard(rid)
@@ -237,6 +382,7 @@ class Manager:
                 if t["state"] != "completed" and t["rd_id"] and t["rd_id"] not in in_rd:
                     log.warning("%s: no longer on Real-Debrid", t["name"])
                     t["state"], t["error"] = "error", "removed from Real-Debrid"
+                    self._event("rd_removed", t.get("hash", ""), t.get("name", ""), "Real-Debrid no longer has this torrent")
             keep = {os.path.join(t["save_path"], clean(t["name"])) for t in self.torrents.values()}
             self._save()
         self._clean_orphans(keep)
@@ -266,6 +412,7 @@ class Manager:
             t = self.torrents.pop(h, None)
             self._save()
         if t:
+            self._event("removed", t.get("hash", ""), t.get("name", ""), "removed from debrid-fetch" + (" with its files" if delete_files else ""))
             if t["rd_id"]:
                 self.rd.delete(t["rd_id"])
             if delete_files:
@@ -291,6 +438,7 @@ class Manager:
         if why:
             log.info("not polling: %s", why)
             return
+        self._check_token()
         with self.lock:
             items = list(self.torrents.values())
         for t in items:
@@ -314,6 +462,8 @@ class Manager:
                         break   # every other torrent would fail the same way
                     if e.status == 404:  # RD no longer has it (deleted on their side)
                         t["state"], t["error"] = "error", "not found on Real-Debrid"
+                        self._event("rd_removed", t.get("hash", ""), t.get("name", ""),
+                                    "Real-Debrid deleted this torrent (404) - it never finished downloading")
                     log.warning("%s: %s", t["name"], e)
                     if e.status == 429:
                         time.sleep(min(e.retry_after or 10, 120))
@@ -352,8 +502,12 @@ class Manager:
         if res == "capped":
             log.warning("%s: already blocklisted and searched %d times; leaving it to you (%s)",
                         t["name"], config.ARR_MAX_ATTEMPTS, a["reason"])
+            self._event("arr_capped", t.get("hash", ""), t.get("name", ""),
+                        f"{slot['type']} blocklisted and searched {config.ARR_MAX_ATTEMPTS}x; not trying again")
         else:
             log.info("%s: marked failed in %s (%s) and searched again", t["name"], slot["type"], a["reason"])
+            self._event("arr_blocklisted", t.get("hash", ""), t.get("name", ""),
+                        f"{slot['type']} blocklisted it ({a['reason']}) and searched again")
         t.pop("arr", None)
         if res == "done":
             self.delete(t["hash"], False)   # the arr no longer tracks it; don't leave a dead item behind
@@ -367,11 +521,13 @@ class Manager:
             log.warning("%s: no progress on Real-Debrid for %dh; giving up", t["name"], config.STALL_TIMEOUT_HOURS)
             t["state"], t["error"] = "error", f"stalled on Real-Debrid for {config.STALL_TIMEOUT_HOURS}h"
             self._flag_block(t, t["error"])
+            self._event("stalled", t.get("hash", ""), t.get("name", ""),
+                        f"no progress on Real-Debrid for {config.STALL_TIMEOUT_HOURS}h")
 
     def _poll_one(self, t):
         info = self.rd.info(t["rd_id"])
         s = info["status"]
-        t["name"] = info.get("filename") or t["name"]
+        was, t["name"] = t["state"], info.get("filename") or t["name"]
         t["size"] = info.get("bytes", t["size"])
         progress = info.get("progress", 0)
         if progress != t.get("rd_progress") or s != t.get("rd_status"):
@@ -383,11 +539,14 @@ class Manager:
         elif s == "downloaded":
             t["links"] = info["links"]
             t["state"] = "rd_ready"
+            if was != "rd_ready":
+                self._event("ready", t.get("hash", ""), t.get("name", ""), "Real-Debrid has the files; fetching them now")
         elif s in ("magnet_error", "error", "virus", "dead", "magnet_conversion"):
             if s == "magnet_conversion":
                 return
             t["state"], t["error"] = "error", s
             self._flag_block(t, s)
+            self._event("rd_failed", t.get("hash", ""), t.get("name", ""), f"Real-Debrid reported the torrent as {s}")
         else:
             t["state"] = "rd_downloading"
 
@@ -443,6 +602,12 @@ class Manager:
                 self._chown(dest)
                 self._save()
             t["state"], t["completed"] = "completed", int(time.time())
+            t["packed"] = is_packed(t["files"])
+            self._event("completed", t.get("hash", ""), t.get("name", ""),
+                        f"{sum(f.get('size', 0) for f in t['files']) >> 20} MB in {len(t['files'])} file(s)")
+            if t["packed"]:
+                self._event("archive", t.get("hash", ""), t.get("name", ""),
+                            "downloaded an archive, not a video - the arr cannot import it until it is extracted")
             if config.DELETE_FROM_RD_ON_COMPLETE:
                 self.rd.delete(t["rd_id"])
         except Paused as e:
@@ -451,6 +616,7 @@ class Manager:
         except Exception as e:
             log.exception("download failed: %s", t["name"])
             t["state"], t["error"] = "error", str(e)
+            self._event("download_failed", t.get("hash", ""), t.get("name", ""), str(e)[:200])
         self._save()
 
     def _check_space(self, root, t):

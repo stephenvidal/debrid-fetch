@@ -152,3 +152,11 @@ input,select{min-width:0;text-overflow:ellipsis}
 @media (max-width:760px){nav a{padding:7px 9px}nav{gap:0}}
 @media (max-width:420px){nav a{padding:7px 7px}.side{padding-left:10px;padding-right:10px}nav{margin:0 -10px;padding:0 10px 8px}}
 @media (max-width:380px){nav a{padding:7px 5px;font-size:13px;gap:4px}}
+
+/* release check + activity history */
+textarea.ta{font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text);background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:11px 13px;width:100%;min-height:140px;resize:vertical;outline:none}
+textarea.ta:focus{border-color:var(--accent)}
+.log .ev{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;padding:1px 0}
+.log .ev .pill{flex:0 0 auto}
+.log .ev .ev-name{max-width:44ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log .ev .ev-detail{color:var(--muted);flex:1 1 24ch}

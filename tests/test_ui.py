@@ -106,3 +106,22 @@ def test_index_versions_asset_urls(client):
     assert f"/static/app.css?v={__version__}" in html and f"/static/app.js?v={__version__}" in html
     assert client.get("/").headers["Cache-Control"] == "no-cache"
     assert client.get(f"/static/app.css?v={__version__}").status_code == 200
+
+
+def test_a_ui_value_that_shadows_a_different_env_value_is_reported(client, env):
+    """The silent override that once kept the app on a dead token: .env looked right, the UI won, nothing said so."""
+    import settings
+    env.setenv("RD_API_TOKEN", "from-env")
+    settings.store.update({"RD_API_TOKEN": "from-ui"})
+    assert [d["key"] for d in settings.store.drift()] == ["RD_API_TOKEN"]
+    st = client.get("/api/ui/status").get_json()
+    assert any("Real-Debrid token" in w for w in st["config_warnings"])
+    assert "from-ui" not in json.dumps(st["config_warnings"])      # never echo the secret
+
+
+def test_no_drift_warning_when_the_ui_and_env_agree(client, env):
+    import settings
+    env.setenv("RD_API_TOKEN", "same")
+    settings.store.update({"RD_API_TOKEN": "same"})
+    assert settings.store.drift() == []
+    assert client.get("/api/ui/status").get_json()["config_warnings"] == []
