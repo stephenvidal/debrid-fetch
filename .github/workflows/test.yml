@@ -32,13 +32,6 @@ jobs:
           vols=$(docker inspect --format '{{json .Config.Volumes}}' debrid-fetch:ci)
           echo "volumes: $vols"
           ! echo "$vols" | grep -q /data/downloads
-      - name: Container starts and reports healthy
-        run: |
-          docker run -d --name df -p 6500:6500 debrid-fetch:ci
-          for i in $(seq 1 30); do
-            [ "$(docker inspect --format '{{.State.Running}}' df)" = true ] || { docker logs df; exit 1; }
-            curl -fsS http://localhost:6500/health && exit 0
-            sleep 1
-          done
-          docker logs df
-          exit 1
+      - name: Container downloads and resumes after restart
+        timeout-minutes: 3
+        run: python3 tests/docker_download_resume.py
